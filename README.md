@@ -1,62 +1,75 @@
 # FormPilot
 
-FormPilot is a web UI plus Python/Playwright backend for inspecting Google Forms, loading or generating structured test-response datasets, and running authorized form automation.
+FormPilot is a web UI plus Python/Playwright backend for inspecting Google Forms, generating structured synthetic/test-response datasets, and running authorized form automation.
 
 ## Project layout
 
 ```
 .
-├── index.html              # Web interface
-├── formpilot.py            # Flask API + Playwright automation backend
-├── open_form.py            # Utility for inspecting a form locally
-├── requirements.txt        # Python dependencies
-├── run_formpilot.bat       # Windows launcher
+├── index.html
+├── formpilot.py
+├── open_form.py
+├── requirements.txt
+├── Dockerfile
+├── render.yaml
+├── run_formpilot.bat
+├── .dockerignore
 ├── .env.example
 ├── .gitignore
 └── LICENSE
 ```
 
-The deployable source files are intentionally at the repository root so hosts that expect the app entry point at the root can detect `index.html` and project files correctly.
-
 ## Run locally
-
-### 1. Install Python dependencies
 
 ```bash
 pip install -r requirements.txt
-```
-
-### 2. Install the Playwright browser
-
-```python -m playwright install chromium
-```
-
-### 3. Start FormPilot
-
-Windows:
-
-```
-run_formpilot.bat
-```
-
-Or directly:
-
-```bash
+python -m playwright install chromium
 python formpilot.py
 ```
 
-Then open the local address printed by Flask.
+Open `http://127.0.0.1:5000`.
 
-## Important deployment note
+On Windows, `run_formpilot.bat` can also start the application.
 
-This project is **not a static website**. The frontend is `index.html`, but the automation features call the Flask endpoints in `formpilot.py` and use Playwright/Chromium.
+## Deploy the complete application
 
-Therefore:
+**Do not deploy only `index.html` with GitHub Pages.** FormPilot requires Flask and Playwright, so a static GitHub Pages deployment will return errors such as:
 
-- GitHub Pages can host the HTML but cannot run the Python/Playwright backend.
-- A static-only deployment will load the UI but the `/api/*` automation endpoints will not work.
-- For the complete application, deploy the Python backend on a service that supports a persistent Python process and browser automation, and point the frontend API calls at that backend.
-- If you specifically want Vercel, the backend needs to be adapted to Vercel's Python/serverless runtime and Playwright's browser-runtime constraints; simply moving the files to the repository root does not solve that.
+```
+POST /api/generate -> 405 Method Not Allowed
+```
+
+The repository includes a Docker configuration that runs Flask and Chromium together.
+
+### Render
+
+1. Open Render and choose **New → Blueprint**.
+2. Connect `omsanap907-dotcom/google-from-auto-bot`.
+3. Render will detect `render.yaml`.
+4. Deploy the `formpilot` web service.
+5. Open the generated Render URL.
+
+The Docker image installs Chromium and Xvfb so Playwright can run in the server environment.
+
+### Why this works
+
+The browser sends requests such as:
+
+```
+POST /api/generate
+POST /api/inspect
+POST /api/start
+POST /api/stop
+GET  /api/status
+```
+
+When the frontend and Flask backend are served by the same Render service, these relative API URLs work without changing the frontend code.
+
+## GitHub Pages
+
+GitHub Pages is suitable for the source repository but **cannot execute `formpilot.py`**. If GitHub Pages is used as the live site, the UI may load while API calls fail with HTTP 405.
+
+Use the Render service URL for the actual FormPilot application.
 
 ## Responsible use
 
@@ -67,7 +80,7 @@ Use FormPilot only with Google Forms and data you are authorized to test or auto
 - Never commit API keys, passwords, cookies, or other secrets.
 - Keep secrets in environment variables.
 - Test automation against forms you own or are authorized to test.
-- Do not commit generated `__pycache__` or browser artifacts.
+- Do not commit `__pycache__` or browser artifacts.
 
 ## License
 
