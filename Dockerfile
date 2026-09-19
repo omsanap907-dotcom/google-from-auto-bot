@@ -6,12 +6,13 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
-    && playwright install --with-deps chromium \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends xvfb \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir -r requirements.txt \
+    && playwright install --with-deps chromium
 
 COPY . .
 
 EXPOSE 10000
 
-CMD ["sh", "-c", "python formpilot.py"]
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1280x900x24 -ac >/tmp/xvfb.log 2>&1 & export DISPLAY=:99; python formpilot.py"]
