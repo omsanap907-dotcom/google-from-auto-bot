@@ -1,51 +1,74 @@
 # FormPilot
 
-A lightweight automation project for generating and submitting Google Forms responses from structured data.
+FormPilot is a web UI plus Python/Playwright backend for inspecting Google Forms, loading or generating structured test-response datasets, and running authorized form automation.
 
-## What it does
-
-FormPilot is designed to streamline repetitive Google Forms workflows by helping you prepare form-response data in a structured format and automate submission/testing.
-
-## Project structure
+## Project layout
 
 ```
-FormPilot/
-├── README.md
-└── ...
+.
+├── index.html              # Web interface
+├── formpilot.py            # Flask API + Playwright automation backend
+├── open_form.py            # Utility for inspecting a form locally
+├── requirements.txt        # Python dependencies
+├── run_formpilot.bat       # Windows launcher
+├── .env.example
+├── .gitignore
+└── LICENSE
 ```
 
-The repository may contain additional scripts and configuration files depending on the current version.
+The deployable source files are intentionally at the repository root so hosts that expect the app entry point at the root can detect `index.html` and project files correctly.
 
-## Getting started
+## Run locally
 
-1. Clone the repository:
+### 1. Install Python dependencies
 
 ```bash
-git clone https://github.com/omsanap907-dotcom/google-from-auto-bot.git
-cd google-from-auto-bot
+pip install -r requirements.txt
 ```
 
-2. Open the `FormPilot` directory.
+### 2. Install the Playwright browser
 
-3. Install the dependencies required by the project files (for example, with `npm install` if a `package.json` is present).
+```python -m playwright install chromium
+```
 
-4. Configure any required form URL, input data, or environment variables.
+### 3. Start FormPilot
 
-5. Run the project's documented script/command.
+Windows:
+
+```
+run_formpilot.bat
+```
+
+Or directly:
+
+```bash
+python formpilot.py
+```
+
+Then open the local address printed by Flask.
+
+## Important deployment note
+
+This project is **not a static website**. The frontend is `index.html`, but the automation features call the Flask endpoints in `formpilot.py` and use Playwright/Chromium.
+
+Therefore:
+
+- GitHub Pages can host the HTML but cannot run the Python/Playwright backend.
+- A static-only deployment will load the UI but the `/api/*` automation endpoints will not work.
+- For the complete application, deploy the Python backend on a service that supports a persistent Python process and browser automation, and point the frontend API calls at that backend.
+- If you specifically want Vercel, the backend needs to be adapted to Vercel's Python/serverless runtime and Playwright's browser-runtime constraints; simply moving the files to the repository root does not solve that.
 
 ## Responsible use
 
-Use FormPilot only with forms and data you are authorized to automate. Do not use it to spam forms, bypass access controls, submit deceptive data, or interfere with services.
+Use FormPilot only with Google Forms and data you are authorized to test or automate. Do not use it to spam forms, bypass access controls, submit deceptive data, or interfere with services.
 
-## Development
+## Security
 
-Before committing changes:
-
-- Keep secrets and API keys out of the repository.
-- Use environment variables for sensitive configuration.
-- Test changes against a form you control.
-- Update this README when setup or commands change.
+- Never commit API keys, passwords, cookies, or other secrets.
+- Keep secrets in environment variables.
+- Test automation against forms you own or are authorized to test.
+- Do not commit generated `__pycache__` or browser artifacts.
 
 ## License
 
-No license has been specified yet. Until a license is added, the repository's code should not be assumed to be freely reusable.
+MIT License. See [LICENSE](LICENSE).
