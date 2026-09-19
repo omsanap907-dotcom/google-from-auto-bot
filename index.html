@@ -1,20 +1,85 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Document Processor</title>
-<style>body{font-family:system-ui,Arial;max-width:850px;margin:auto;padding:16px;background:#f5f5f5;color:#171717}.card{background:#fff;padding:20px;border:1px solid #ddd;border-radius:14px}.button{padding:12px 16px;margin-top:12px;border:0;border-radius:9px;background:#111;color:#fff;font-weight:600;width:100%}.status{display:flex;justify-content:space-between;margin-top:18px;font-weight:600}#bar{height:10px;background:#ddd;margin-top:12px;border-radius:99px;overflow:hidden}#fill{height:100%;background:#222;width:0;transition:width .3s}#logbox{margin-top:18px;border:1px solid #ddd;border-radius:10px;background:#101010;color:#eee;height:260px;overflow:auto;padding:10px;font-family:monospace;font-size:12px}.log{padding:5px 2px;border-bottom:1px solid #252525}.time{color:#999}.success{color:#8fdf9b}.error{color:#ff8d8d}.small{color:#666;font-size:13px}#job{font-family:monospace;font-size:11px;word-break:break-all}</style></head>
-<body><div class="card"><h1>Document Processor</h1><p>Upload a PDF and the server will process it in the background, 500 words at a time.</p>
-<input id="file" type="file" accept=".pdf"><button class="button" onclick="run()">Start processing</button>
-<div class="status"><span id="status">Idle</span><span id="count">0 / 0</span></div><div id="bar"><div id="fill"></div></div>
-<p class="small">Job ID: <span id="job">—</span></p><div id="logbox"></div><button id="download" class="button" style="display:none" onclick="downloadFile()">Download DOCX</button></div>
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Document Processor</title>
+<style>
+body{font-family:system-ui,Arial;max-width:900px;margin:auto;padding:16px;background:#f5f5f5;color:#171717}
+.card{background:#fff;padding:20px;border:1px solid #ddd;border-radius:14px}
+.button{padding:12px 16px;margin-top:12px;border:0;border-radius:9px;background:#111;color:#fff;font-weight:600;width:100%}
+.secondary{background:#e9e9e9;color:#111}.status{display:flex;justify-content:space-between;margin-top:18px;font-weight:600}
+#bar{height:10px;background:#ddd;margin-top:12px;border-radius:99px;overflow:hidden}#fill{height:100%;background:#222;width:0;transition:width .3s}
+#logbox{margin-top:18px;border:1px solid #ddd;border-radius:10px;background:#101010;color:#eee;height:260px;overflow:auto;padding:10px;font-family:monospace;font-size:12px}
+.log{padding:5px 2px;border-bottom:1px solid #252525}.time{color:#999}.success{color:#8fdf9b}.error{color:#ff8d8d}.small{color:#666;font-size:13px}
+#job{font-family:monospace;font-size:11px;word-break:break-all}
+#captcha{display:none;margin-top:18px;border:2px solid #e0a100;border-radius:12px;padding:12px;background:#fff9e6}
+#capimg{display:block;width:100%;height:auto;border:1px solid #bbb;border-radius:8px;touch-action:none;cursor:crosshair}
+.hint{font-size:13px;color:#555}.row{display:flex;gap:8px}.row button{flex:1}
+</style></head>
+<body><div class="card">
+<h1>Document Processor</h1>
+<p>Upload a PDF and process it in 500-word chunks. If the target site asks for CAPTCHA, it will pause and let you solve it from your phone.</p>
+<input id="file" type="file" accept=".pdf">
+<button class="button" onclick="run()">Start processing</button>
+<div class="status"><span id="status">Idle</span><span id="count">0 / 0</span></div>
+<div id="bar"><div id="fill"></div></div>
+<p class="small">Job ID: <span id="job">—</span></p>
+<div id="captcha">
+<h3>🔐 CAPTCHA required</h3>
+<p class="hint">Tap the CAPTCHA checkbox/challenge on the image below. The tap is sent to the browser running on the server. If the challenge needs scrolling, use the buttons below.</p>
+<img id="capimg" alt="CAPTCHA browser screenshot">
+<div class="row"><button class="button secondary" onclick="captchaAction('scroll',0,600)">Scroll down</button><button class="button secondary" onclick="captchaAction('scroll',0,-600)">Scroll up</button></div>
+<button class="button secondary" onclick="reloadCaptcha()">Reload page</button>
+<p class="hint" id="capmsg"></p>
+</div>
+<div id="logbox"></div>
+<button id="download" class="button" style="display:none" onclick="downloadFile()">Download DOCX</button>
+</div>
 <script>
-const $=id=>document.getElementById(id);let jobId=null;
-async function run(){const f=$('file').files[0];if(!f){$('status').textContent='Select a PDF';return}
-$('status').textContent='Uploading PDF...';$('download').style.display='none';
-const fd=new FormData();fd.append('file',f);
-try{const r=await fetch('/api/process-pdf',{method:'POST',body:fd});const d=await r.json();if(!r.ok)throw Error(d.error||'Upload failed');jobId=d.jobId;$('job').textContent=jobId;$('status').textContent='Queued — background processing started';refresh();}
-catch(e){$('status').textContent=e.message}}
-async function refresh(){if(!jobId)return;try{const d=await(await fetch('/api/jobs/'+jobId)).json();if(d.error)throw Error(d.error);
-$('status').textContent=d.message||d.status;$('count').textContent=(d.current||0)+' / '+(d.total||0);if(d.total)$('fill').style.width=(d.current/d.total*100)+'%';
-$('logbox').innerHTML=(d.logs||[]).map(x=>'<div class="log '+x.level+'"><span class="time">['+x.time+']</span> '+x.message+'</div>').join('');$('logbox').scrollTop=$('logbox').scrollHeight;
-if(d.status==='Completed')$('download').style.display='block';if(d.status==='Error')$('download').style.display='none';}catch(e){}}
+const $=id=>document.getElementById(id);let jobId=null,capTimer=null;
+async function run(){
+ const f=$('file').files[0];if(!f){$('status').textContent='Select a PDF';return}
+ $('status').textContent='Uploading PDF...';$('download').style.display='none';$('captcha').style.display='none';
+ const fd=new FormData();fd.append('file',f);
+ try{const r=await fetch('/api/process-pdf',{method:'POST',body:fd});const d=await r.json();if(!r.ok)throw Error(d.error||'Upload failed');
+ jobId=d.jobId;$('job').textContent=jobId;$('status').textContent='Queued — background processing started';refresh();}
+ catch(e){$('status').textContent=e.message}
+}
+async function refresh(){
+ if(!jobId)return;
+ try{
+  const d=await(await fetch('/api/jobs/'+jobId)).json();if(d.error)throw Error(d.error);
+  $('status').textContent=d.message||d.status;$('count').textContent=(d.current||0)+' / '+(d.total||0);
+  if(d.total)$('fill').style.width=(d.current/d.total*100)+'%';
+  $('logbox').innerHTML=(d.logs||[]).map(x=>'<div class="log '+x.level+'"><span class="time">['+x.time+']</span> '+esc(x.message)+'</div>').join('');
+  $('logbox').scrollTop=$('logbox').scrollHeight;
+  if(d.status==='CAPTCHA') showCaptcha();
+  else if(d.status!=='CAPTCHA') $('captcha').style.display='none';
+  if(d.status==='Completed')$('download').style.display='block';
+  if(d.status==='Error')$('download').style.display='none';
+ }catch(e){}
+}
+function esc(s){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+async function showCaptcha(){
+ $('captcha').style.display='block';
+ await loadCaptcha();
+ if(!capTimer)capTimer=setInterval(loadCaptcha,1500);
+}
+async function loadCaptcha(){
+ if(!jobId)return;
+ const r=await fetch('/api/jobs/'+jobId+'/captcha/image?ts='+Date.now());
+ if(r.ok){const blob=await r.blob();$('capimg').src=URL.createObjectURL(blob);$('capmsg').textContent='Tap the CAPTCHA in the screenshot.'}
+}
+$('capimg').addEventListener('click',async e=>{
+ const r=e.currentTarget.getBoundingClientRect();
+ const x=(e.clientX-r.left)*(1280/r.width);
+ const y=(e.clientY-r.top)*(900/r.height);
+ await captchaAction('click',x,y);
+ setTimeout(loadCaptcha,500);
+});
+async function captchaAction(action,x,y){
+ if(!jobId)return;
+ await fetch('/api/jobs/'+jobId+'/captcha/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,x,y})});
+}
+function reloadCaptcha(){captchaAction('reload',0,0);setTimeout(loadCaptcha,1000)}
 function downloadFile(){window.location.href='/api/jobs/'+jobId+'/download'}
 setInterval(refresh,1000);
 </script></body></html>
