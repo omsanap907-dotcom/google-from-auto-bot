@@ -1,1 +1,36 @@
-<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Document Processor</title><style>body{font-family:Arial;max-width:850px;margin:auto;padding:24px;background:#f5f5f5}.card{background:#fff;padding:20px;border:1px solid #ddd;border-radius:12px}button{padding:11px 16px;margin-top:12px}#bar{height:10px;background:#ddd;margin-top:15px}#fill{height:100%;background:#222;width:0}</style><div class="card"><h1>Document Processor</h1><p>Upload a PDF. The bot processes extracted text sequentially in batches of up to 500 words.</p><input id="file" type="file" accept=".pdf"><br><button onclick="run()">Process complete document</button><p id="status"></p><div id="bar"><div id="fill"></div></div></div><script>async function run(){if(!file.files[0])return status.textContent='Select a PDF';let fd=new FormData();fd.append('file',file.files[0]);status.textContent='Processing...';let r=await fetch('/api/process-pdf',{method:'POST',body:fd});if(!r.ok){status.textContent=await r.text();return}let b=await r.blob(),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download='processed_document.docx';a.click();URL.revokeObjectURL(u);status.textContent='Completed'}setInterval(async()=>{try{let d=await(await fetch('/api/status')).json();status.textContent=d.message||d.status;if(d.total)fill.style.width=(d.current/d.total*100)+'%'}catch(e){}},1500)</script>
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Document Processor</title>
+<style>
+body{font-family:system-ui,Arial;max-width:850px;margin:auto;padding:16px;background:#f5f5f5;color:#171717}
+.card{background:#fff;padding:20px;border:1px solid #ddd;border-radius:14px;box-shadow:0 2px 10px #0000000d}
+button{padding:12px 16px;margin-top:12px;border:0;border-radius:9px;background:#111;color:#fff;font-weight:600;width:100%}
+input{max-width:100%;margin-top:8px}.status{display:flex;justify-content:space-between;gap:10px;margin-top:18px;font-weight:600}
+#bar{height:10px;background:#ddd;margin-top:12px;border-radius:99px;overflow:hidden}#fill{height:100%;background:#222;width:0;transition:width .3s}
+#logbox{margin-top:18px;border:1px solid #ddd;border-radius:10px;background:#101010;color:#eee;height:260px;overflow:auto;padding:10px;font-family:monospace;font-size:12px}
+.log{padding:5px 2px;border-bottom:1px solid #252525}.time{color:#999}.success{color:#8fdf9b}.error{color:#ff8d8d}
+.small{color:#666;font-size:13px}
+</style></head>
+<body><div class="card"><h1>Document Processor</h1><p>Upload a PDF. The bot processes extracted text sequentially in batches of up to 500 words.</p>
+<input id="file" type="file" accept=".pdf"><button onclick="run()">Process complete document</button>
+<div class="status"><span id="status">Idle</span><span id="count">0 / 0</span></div><div id="bar"><div id="fill"></div></div>
+<p class="small">Live activity log — keep this page open on your phone to watch progress.</p><div id="logbox"></div></div>
+<script>
+const $=id=>document.getElementById(id);
+async function run(){
+ if(!$('file').files[0]){$('status').textContent='Select a PDF';return}
+ let fd=new FormData();fd.append('file',$('file').files[0]);$('status').textContent='Uploading...';
+ let r=await fetch('/api/process-pdf',{method:'POST',body:fd});
+ if(!r.ok){$('status').textContent='Error';return}
+ let b=await r.blob(),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download='processed_document.docx';a.click();URL.revokeObjectURL(u);$('status').textContent='Completed';
+}
+async function refresh(){
+ try{
+  let d=await(await fetch('/api/logs')).json();
+  $('status').textContent=d.message||d.status;$('count').textContent=(d.current||0)+' / '+(d.total||0);
+  if(d.total)$('fill').style.width=(d.current/d.total*100)+'%';
+  $('logbox').innerHTML=(d.logs||[]).map(x=>'<div class="log '+x.level+'"><span class="time">['+x.time+']</span> '+x.message+'</div>').join('');
+  $('logbox').scrollTop=$('logbox').scrollHeight;
+ }catch(e){}
+}
+setInterval(refresh,1000);refresh();
+</script></body></html>
