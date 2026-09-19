@@ -12,9 +12,16 @@ APP_DIR=Path(__file__).resolve().parent
 WORK_DIR=APP_DIR/"work"; WORK_DIR.mkdir(exist_ok=True)
 app=Flask(__name__)
 _lock=Lock()
-_state={"status":"Idle","message":"","current":0,"total":0,"error":None}
+_state={"status":"Idle","message":"","current":0,"total":0,"error":None,"logs":[]}
+MAX_LOGS=200
 TARGET_URL="https://www.plagiarismremover.co/"
 MAX_WORDS=500
+
+def log_event(message, level="info"):
+    from datetime import datetime
+    with _lock:
+        _state["logs"].append({"time":datetime.now().strftime("%H:%M:%S"),"message":message,"level":level})
+        _state["logs"]=_state["logs"][-MAX_LOGS:]
 
 def set_state(**kw):
     with _lock: _state.update(kw)
@@ -96,22 +103,33 @@ def process_pdf():
     try:
         text=extract(src)
         if not text: raise RuntimeError("No extractable text found")
-        cs=chunks(text); set_state(status="Running",message="Starting",current=0,total=len(cs),error=None)
+        cs=chunks(text); set_state(status="Running",message="Starting",current=0,total=len(cs),error=None,logs=[])
+        log_event(f"Job started: {len(cs)} chunks found")
         with sync_playwright() as p:
             b=p.chromium.launch(headless=True); page=b.new_page(viewport={"width":1280,"height":900})
             try:
                 for n,c in enumerate(cs,1):
                     set_state(message=f"Processing chunk {n}/{len(cs)}",current=n,total=len(cs))
+                    log_event(f"Starting chunk {n}/{len(cs)} ({wc(c)} words)")
                     done.append(process_chunk(page,c))
+                    log_event(f"Chunk {n}/{len(cs)} completed","success")
             finally: b.close()
-        make_docx(done,out); set_state(status="Completed",message="All chunks processed",current=len(cs),total=len(cs))
+        make_docx(done,out)
+        log_event("DOCX created successfully","success")
+        set_state(status="Completed",message="All chunks processed",current=len(cs),total=len(cs))
         return send_file(out,as_attachment=True,download_name="processed_document.docx")
     except Exception as e:
+        log_event(f"Error: {e}","error")
         set_state(status="Error",message=str(e),error=str(e))
         return jsonify({"error":str(e),"completedChunks":len(done)}),500
     finally:
         try: src.unlink()
         except: pass
+
+@app.get("/api/logs")
+def logs():
+    with _lock:
+        return jsonify({"status":_state["status"],"message":_state["message"],"current":_state["current"],"total":_state["total"],"logs":list(_state["logs"])})
 
 @app.get("/api/status")
 def status():
