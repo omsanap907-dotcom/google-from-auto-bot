@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PDF Paraphrasing Processor</title>
+<title>PDF Paraphrasing Processor • v3</title>
 <style>
 body{font-family:system-ui,Arial;max-width:1000px;margin:auto;padding:16px;background:#f5f5f5;color:#171717}
 .card{background:#fff;padding:20px;border:1px solid #ddd;border-radius:14px}
@@ -36,7 +36,8 @@ body{font-family:system-ui,Arial;max-width:1000px;margin:auto;padding:16px;backg
 </div>
 
 <script>
-const API_BASE="https://document-processor-exampdfx-production.up.railway.app";
+const DEFAULT_API="https://document-processor-exampdfx-production.up.railway.app";
+const API_BASE=(location.hostname.endsWith(".up.railway.app") ? location.origin : DEFAULT_API);
 const $=id=>document.getElementById(id);
 let jobId=null;
 
