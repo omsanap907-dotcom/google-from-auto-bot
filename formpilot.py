@@ -16,6 +16,14 @@ app = Flask(__name__)
 _lock = Lock()
 _jobs = {}
 
+# Allow the GitHub Pages frontend to call this Railway API.
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
 TARGET_URL = "https://exampdfx.com/paraphrasing-tool"
 MAX_CHARS = 2800
 MAX_LOGS = 200
