@@ -6,9 +6,7 @@
 <title>PDF Paraphrasing Processor</title>
 <style>
 :root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f4f5f7}
-*{box-sizing:border-box}
-body{margin:0;padding:22px}
-.wrap{max-width:980px;margin:0 auto}
+*{box-sizing:border-box}body{margin:0;padding:22px}.wrap{max-width:980px;margin:0 auto}
 .card{background:#fff;border:1px solid #dedede;border-radius:18px;padding:24px;box-shadow:0 8px 30px rgba(0,0,0,.05)}
 h1{margin:0 0 8px;font-size:28px}.sub{color:#666;margin:0 0 18px;line-height:1.5}
 .info{padding:13px 15px;border-radius:12px;background:#f0f1f3;margin-bottom:18px;line-height:1.5}
@@ -16,7 +14,8 @@ input[type=file]{width:100%;padding:10px;border:1px solid #ccc;border-radius:10p
 button{width:100%;border:0;border-radius:10px;background:#111;color:#fff;padding:13px 15px;margin-top:12px;font-size:15px;font-weight:700;cursor:pointer}
 button:disabled{opacity:.6;cursor:not-allowed}.row{display:flex;justify-content:space-between;gap:16px;margin-top:20px;font-weight:700}
 .bar{height:11px;background:#dedede;border-radius:999px;overflow:hidden;margin-top:10px}.fill{height:100%;width:0;background:#111;transition:width .3s}
-.job{font-size:12px;color:#777;margin-top:9px;word-break:break-all}.logs{margin-top:18px;background:#111;color:#eee;border-radius:13px;padding:12px;height:320px;overflow:auto;font:12px/1.55 Consolas,monospace}
+.job{font-size:12px;color:#777;margin-top:9px;word-break:break-all}
+.logs{margin-top:18px;background:#111;color:#eee;border-radius:13px;padding:12px;height:320px;overflow:auto;font:12px/1.55 Consolas,monospace}
 .log{padding:5px 2px;border-bottom:1px solid #292929}.time{color:#888}.success{color:#8fdf9b}.error{color:#ff8c8c}
 .download{display:none}.note{margin-top:14px;font-size:13px;color:#666}
 @media(max-width:600px){body{padding:12px}.card{padding:17px}h1{font-size:23px}.logs{height:280px}}
@@ -25,8 +24,8 @@ button:disabled{opacity:.6;cursor:not-allowed}.row{display:flex;justify-content:
 <body>
 <div class="wrap"><div class="card">
 <h1>PDF Paraphrasing Processor</h1>
-<p class="sub">Upload a PDF and receive a rewritten DOCX. This final version uses a local open-source paraphrasing model and does not depend on CAPTCHA or a third-party website.</p>
-<div class="info"><b>Engine:</b> Vamsi/T5_Paraphrase_Paws &nbsp;•&nbsp; <b>Processing:</b> local on Railway</div>
+<p class="sub">Upload a PDF and receive a rewritten DOCX using a local open-source paraphrasing model. No CAPTCHA and no third-party web automation.</p>
+<div class="info"><b>Engine:</b> T5 GGUF (Q4_K_M) &nbsp;•&nbsp; <b>Processing:</b> local on Railway &nbsp;•&nbsp; <b>Output:</b> DOCX</div>
 <input id="file" type="file" accept=".pdf">
 <button id="start" onclick="run()">Start processing</button>
 <div class="row"><span id="status">Idle</span><span id="count">0 / 0</span></div>
@@ -34,20 +33,16 @@ button:disabled{opacity:.6;cursor:not-allowed}.row{display:flex;justify-content:
 <div class="job">Job ID: <span id="job">—</span></div>
 <div class="logs" id="logs"></div>
 <button class="download" id="download" onclick="downloadFile()">Download DOCX</button>
-<div class="note">No paraphrasing system can guarantee a specific plagiarism-checker score. Review the rewritten document and keep citations for source material.</div>
+<div class="note">No paraphrasing system can guarantee a specific plagiarism-checker score. Review the output and retain required source citations.</div>
 </div></div>
-
 <script>
 const $=id=>document.getElementById(id);
 let jobId=null;
-
 async function jsonResponse(r){
- const text=await r.text(); let data;
+ const text=await r.text();let data;
  try{data=JSON.parse(text)}catch{throw new Error("Server returned an invalid response")}
- if(!r.ok)throw new Error(data.error||("HTTP "+r.status));
- return data;
+ if(!r.ok)throw new Error(data.error||("HTTP "+r.status));return data;
 }
-
 async function run(){
  const file=$("file").files[0];
  if(!file){$("status").textContent="Choose a PDF first";return}
@@ -55,16 +50,16 @@ async function run(){
  $("job").textContent="—";$("count").textContent="0 / 0";$("fill").style.width="0%";$("status").textContent="Uploading…";
  try{
   const fd=new FormData();fd.append("file",file);
-  const r=await fetch("/api/process-pdf",{method:"POST",body:fd});
-  const d=await jsonResponse(r);jobId=d.jobId;$("job").textContent=jobId;refresh();
+  const d=await jsonResponse(await fetch("/api/process-pdf",{method:"POST",body:fd}));
+  jobId=d.jobId;$("job").textContent=jobId;refresh();
  }catch(e){$("status").textContent=e.message;$("logs").innerHTML='<div class="log error">'+esc(e.message)+'</div>';$("start").disabled=false}
 }
-
 async function refresh(){
  if(!jobId)return;
  try{
-  const r=await fetch("/api/jobs/"+encodeURIComponent(jobId),{cache:"no-store"});const d=await jsonResponse(r);
-  $("status").textContent=d.message||d.status;$("count").textContent=(d.current||0)+" / "+(d.total||0);
+  const d=await jsonResponse(await fetch("/api/jobs/"+encodeURIComponent(jobId),{cache:"no-store"}));
+  $("status").textContent=d.message||d.status;
+  $("count").textContent=(d.current||0)+" / "+(d.total||0);
   $("fill").style.width=d.total?((d.current/d.total)*100)+"%":"0%";
   $("logs").innerHTML=(d.logs||[]).map(x=>'<div class="log '+esc(x.level||"info")+'"><span class="time">['+esc(x.time||"")+']</span> '+esc(x.message||"")+'</div>').join("");
   $("logs").scrollTop=$("logs").scrollHeight;
@@ -72,7 +67,6 @@ async function refresh(){
   if(d.status==="Error")$("start").disabled=false;
  }catch(e){$("status").textContent=e.message}
 }
-
 function esc(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"}[m]))}
 function downloadFile(){if(jobId)location.href="/api/jobs/"+encodeURIComponent(jobId)+"/download"}
 setInterval(refresh,1000);
