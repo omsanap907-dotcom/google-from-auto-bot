@@ -1,32 +1,41 @@
 # PDF Paraphrasing Processor
 
-Final self-contained PDF-to-DOCX paraphrasing service.
+Browser-first PDF paraphrasing app with DOCX export.
 
-The project no longer automates ExampdfX or another third-party webpage. It runs the open-source Vamsi/T5_Paraphrase_Paws model in GGUF Q4_K_M format through llama-cpp-python.
+## Final architecture
 
-The GGUF model repository lists Q4_K_M at about 137 MB and describes it as a balanced quantization of Vamsi/T5_Paraphrase_Paws.
+The main GitHub Pages interface runs the rewrite model **in the browser**. It does not need a Railway API or third-party paraphrasing website.
 
-Workflow:
-1. Upload PDF.
-2. Extract text page by page.
-3. Split into small English text chunks.
-4. Paraphrase locally on Railway.
-5. Rebuild the pages into a DOCX.
-6. Download the document.
+The app uses:
+- PDF.js to extract PDF text in the browser.
+- Hugging Face Transformers.js to run an ONNX/T5 paraphrasing model in the browser.
+- docx.js to create the DOCX in the browser.
+- WebGPU when available, otherwise WASM.
 
-Important:
-- This is paraphrasing, not a guarantee of any plagiarism-checker score.
-- Review the output and keep citations required by your assignment.
-- The first run downloads the model and is slower.
+Model:
+- \`sk1729271/revision-assistant-rewrite-plag\`
+- Its model card provides an int8 quantized ONNX model for browser/Transformers.js use and a scientific-text paraphrasing prefix.
 
-Environment variables:
-MODEL_REPO
-MODEL_FILE
-MODEL_CTX
-MODEL_THREADS
-MAX_UNIT_WORDS
-MAX_OUTPUT_TOKENS
+## Workflow
 
-Default model:
-tensorblock/T5_Paraphrase_Paws-GGUF
-T5_Paraphrase_Paws-Q4_K_M.gguf
+1. Open the GitHub Pages site.
+2. Choose a PDF.
+3. The browser reads the PDF locally.
+4. Text is split into small chunks.
+5. The local browser model rewrites each chunk.
+6. Progress is shown live.
+7. A DOCX is generated and downloaded.
+
+The first run downloads the browser model from Hugging Face. Later runs can use the browser cache.
+
+## Privacy
+
+The application code does not send the uploaded PDF to a Railway backend or paraphrasing website. PDF extraction and model inference happen in the browser. The browser still needs internet access to download the JavaScript libraries and model files.
+
+## Important
+
+This is a paraphrasing tool, not a guarantee of a particular plagiarism-checker score. Review the output and keep citations required by your assignment.
+
+## Current GitHub Pages URL
+
+https://omsanap907-dotcom.github.io/google-from-auto-bot/
