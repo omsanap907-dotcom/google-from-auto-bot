@@ -22,7 +22,7 @@ body{font-family:system-ui,Arial;max-width:1000px;margin:auto;padding:16px;backg
 <div class="card">
 <h1>PDF Paraphrasing Processor</h1>
 <p>Upload a PDF. The processor extracts the text, splits it below ExampdfX's 3,000-character input limit, sends each chunk in <b>Formal</b> mode, then creates a DOCX.</p>
-<div class="info">No CAPTCHA interaction is required by this workflow. Processing depends on the target site's current page and availability.</div>
+<div class="info">Backend: Railway • Rewriter: ExampdfX • Chunks: up to 2,800 characters</div>
 
 <input id="file" type="file" accept=".pdf">
 <button class="button" onclick="run()">Start processing</button>
@@ -36,8 +36,20 @@ body{font-family:system-ui,Arial;max-width:1000px;margin:auto;padding:16px;backg
 </div>
 
 <script>
+const API_BASE="https://document-processor-fix-production.up.railway.app";
 const $=id=>document.getElementById(id);
 let jobId=null;
+
+async function readResponse(r){
+ const text=await r.text();
+ let data=null;
+ try{data=JSON.parse(text)}catch(e){}
+ if(!r.ok){
+   throw Error((data&&data.error)||('Backend returned HTTP '+r.status));
+ }
+ if(data===null) throw Error('Backend returned a non-JSON response');
+ return data;
+}
 
 async function run(){
  const f=$('file').files[0];
@@ -45,39 +57,44 @@ async function run(){
  $('status').textContent='Uploading PDF...';
  $('download').style.display='none';
  $('logbox').innerHTML='';
+ $('job').textContent='—';
+ $('count').textContent='0 / 0';
+ $('fill').style.width='0%';
+
  const fd=new FormData();
  fd.append('file',f);
 
  try{
-  const r=await fetch('/api/process-pdf',{method:'POST',body:fd});
-  const d=await r.json();
-  if(!r.ok)throw Error(d.error||'Upload failed');
+  const r=await fetch(API_BASE+'/api/process-pdf',{method:'POST',body:fd});
+  const d=await readResponse(r);
   jobId=d.jobId;
   $('job').textContent=jobId;
-  $('status').textContent='Queued';
-  refresh();
- }catch(e){$('status').textContent=e.message;}
+  $('status').textContent=d.message||d.status||'Queued';
+  await refresh();
+ }catch(e){
+  $('status').textContent=e.message;
+  $('logbox').innerHTML='<div class="log error">'+esc(e.message)+'</div>';
+ }
 }
 
 async function refresh(){
  if(!jobId)return;
  try{
-  const d=await(await fetch('/api/jobs/'+jobId)).json();
-  if(d.error)throw Error(d.error);
+  const r=await fetch(API_BASE+'/api/jobs/'+encodeURIComponent(jobId));
+  const d=await readResponse(r);
 
   $('status').textContent=d.message||d.status;
   $('count').textContent=(d.current||0)+' / '+(d.total||0);
-
   if(d.total)$('fill').style.width=(d.current/d.total*100)+'%';
 
   $('logbox').innerHTML=(d.logs||[]).map(x=>
-    '<div class="log '+x.level+'"><span class="time">['+x.time+']</span> '+esc(x.message)+'</div>'
+    '<div class="log '+esc(x.level||'info')+'"><span class="time">['+esc(x.time||'')+']</span> '+esc(x.message||'')+'</div>'
   ).join('');
   $('logbox').scrollTop=$('logbox').scrollHeight;
 
   if(d.status==='Completed')$('download').style.display='block';
  }catch(e){
-  $('status').textContent=e.message;
+  if(jobId)$('status').textContent=e.message;
  }
 }
 
@@ -86,7 +103,7 @@ function esc(s){
 }
 
 function downloadFile(){
- window.location.href='/api/jobs/'+jobId+'/download';
+ if(jobId)window.location.href=API_BASE+'/api/jobs/'+encodeURIComponent(jobId)+'/download';
 }
 
 setInterval(refresh,1000);
