@@ -1,4 +1,6 @@
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 Flask>=3.0,<4
 pypdf>=5.0
 python-docx>=1.1
 huggingface-hub>=0.30
+llama-cpp-python==0.3.35
