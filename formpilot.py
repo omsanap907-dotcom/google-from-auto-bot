@@ -4,11 +4,10 @@ import uuid
 from pathlib import Path
 from threading import Lock, Thread
 
-import torch
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from docx import Document
+from llama_cpp import Llama
 from pypdf import PdfReader
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 APP_DIR = Path(__file__).resolve().parent
 WORK_DIR = APP_DIR / "work"
@@ -19,26 +18,22 @@ _lock = Lock()
 _model_lock = Lock()
 _jobs = {}
 
-MODEL_ID = os.getenv("MODEL_ID", "Vamsi/T5_Paraphrase_Paws")
-HF_HOME = os.getenv("HF_HOME", str(APP_DIR / "hf-cache"))
-os.environ["HF_HOME"] = HF_HOME
+MODEL_REPO = os.getenv("MODEL_REPO", "tensorblock/T5_Paraphrase_Paws-GGUF")
+MODEL_FILE = os.getenv("MODEL_FILE", "T5_Paraphrase_Paws-Q4_K_M.gguf")
+MODEL_CTX = int(os.getenv("MODEL_CTX", "512"))
+MODEL_THREADS = int(os.getenv("MODEL_THREADS", "4"))
+MAX_UNIT_WORDS = int(os.getenv("MAX_UNIT_WORDS", "110"))
+MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "220"))
 
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "4"))
-MAX_UNIT_WORDS = int(os.getenv("MAX_UNIT_WORDS", "180"))
-MAX_INPUT_TOKENS = int(os.getenv("MAX_INPUT_TOKENS", "384"))
-MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "256"))
-
-_tokenizer = None
 _model = None
-_device = None
-
-
-def word_count(text):
-    return len(re.findall(r"\S+", text or ""))
 
 
 def clean_text(text):
     return re.sub(r"\s+", " ", text or "").strip()
+
+
+def word_count(text):
+    return len(re.findall(r"\S+", text or ""))
 
 
 def extract_pages(path):
@@ -83,7 +78,7 @@ def make_units(text, max_words=MAX_UNIT_WORDS):
                 units.append(" ".join(words[i:i + max_words]))
             continue
 
-        candidate = words if not current else current + words
+        candidate = current + words
         if len(candidate) <= max_words:
             current = candidate
         else:
@@ -94,60 +89,57 @@ def make_units(text, max_words=MAX_UNIT_WORDS):
     return units
 
 
-def init_model():
-    global _tokenizer, _model, _device
+def init_model(job=None):
+    global _model
+
     with _model_lock:
         if _model is not None:
             return
 
-        torch.set_num_threads(max(1, int(os.getenv("TORCH_THREADS", "2"))))
-        _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if job:
+            update(job, message="Loading local paraphrasing model (first run downloads about 137 MB)...")
+            log(job, f"Model: {MODEL_REPO}/{MODEL_FILE}")
 
-        _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-        _model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_ID).to(_device)
-        _model.eval()
-
-
-def paraphrase_batch(texts):
-    init_model()
-
-    prompts = ["paraphrase: " + clean_text(t) for t in texts]
-    encoded = _tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=MAX_INPUT_TOKENS,
-    )
-    encoded = {k: v.to(_device) for k, v in encoded.items()}
-
-    with torch.inference_mode():
-        outputs = _model.generate(
-            **encoded,
-            num_beams=4,
-            max_new_tokens=MAX_OUTPUT_TOKENS,
-            repetition_penalty=1.15,
-            no_repeat_ngram_size=3,
-            early_stopping=True,
+        _model = Llama.from_pretrained(
+            repo_id=MODEL_REPO,
+            filename=MODEL_FILE,
+            n_ctx=MODEL_CTX,
+            n_threads=MODEL_THREADS,
+            verbose=False,
         )
 
-    results = _tokenizer.batch_decode(outputs, skip_special_tokens=True)
-    final = []
+        if job:
+            log(job, "Local GGUF model loaded", "success")
 
-    for original, rewritten in zip(texts, results):
-        rewritten = clean_text(rewritten)
 
-        if word_count(rewritten) < max(5, int(word_count(original) * 0.25)):
-            final.append(original)
-            continue
+def paraphrase_one(text):
+    init_model()
 
-        if rewritten.casefold() == clean_text(original).casefold():
-            final.append(original)
-            continue
+    prompt = "paraphrase: " + clean_text(text)
 
-        final.append(rewritten)
+    result = _model(
+        prompt,
+        max_tokens=MAX_OUTPUT_TOKENS,
+        temperature=0.7,
+        top_p=0.95,
+        repeat_penalty=1.1,
+        echo=False,
+        stop=["</s>"],
+    )
 
-    return final
+    rewritten = clean_text(result["choices"][0]["text"])
+
+    if not rewritten:
+        return text
+
+    # Never replace useful source text with an obviously truncated response.
+    if word_count(rewritten) < max(5, int(word_count(text) * 0.30)):
+        return text
+
+    if rewritten.casefold() == clean_text(text).casefold():
+        return text
+
+    return rewritten
 
 
 def new_job(job):
@@ -188,12 +180,12 @@ def log(job, message, level="info"):
 
 def make_docx(page_results, path):
     doc = Document()
-    first = True
+    first_page = True
 
     for page_no, blocks in page_results:
-        if not first:
+        if not first_page:
             doc.add_page_break()
-        first = False
+        first_page = False
 
         for block in blocks:
             if block.strip():
@@ -205,6 +197,7 @@ def make_docx(page_results, path):
 def run_job(job, src, out):
     try:
         pages = extract_pages(src)
+
         if not any(clean_text(p) for p in pages):
             raise RuntimeError("No extractable text found in PDF")
 
@@ -220,35 +213,28 @@ def run_job(job, src, out):
         update(
             job,
             status="Running",
-            message=f"Starting local paraphrasing: {total} text chunks",
             current=0,
             total=total,
+            message=f"Starting local paraphrasing: {total} chunks",
         )
-        log(job, f"Loaded PDF: {len(pages)} pages, {total} chunks")
-        log(job, f"Local model: {MODEL_ID}")
+        log(job, f"PDF loaded: {len(pages)} pages / {total} chunks")
+
+        init_model(job)
 
         results_by_page = {}
         completed = 0
 
-        update(job, message="Loading paraphrasing model (first run can take a while)...")
-        init_model()
-        log(job, "Paraphrasing model loaded", "success")
+        for page_no, unit in page_units:
+            rewritten = paraphrase_one(unit)
+            results_by_page.setdefault(page_no, []).append(rewritten)
 
-        for start in range(0, total, BATCH_SIZE):
-            batch = page_units[start:start + BATCH_SIZE]
-            texts = [x[1] for x in batch]
-            rewritten = paraphrase_batch(texts)
-
-            for (page_no, _), result in zip(batch, rewritten):
-                results_by_page.setdefault(page_no, []).append(result)
-
-            completed += len(batch)
+            completed += 1
             update(
                 job,
                 current=completed,
                 message=f"Paraphrasing chunk {completed}/{total}",
             )
-            log(job, f"Completed {completed}/{total} chunks", "success")
+            log(job, f"Completed chunk {completed}/{total}", "success")
 
         page_results = [
             (page_no, results_by_page.get(page_no, []))
@@ -259,9 +245,9 @@ def run_job(job, src, out):
         update(
             job,
             status="Completed",
-            message="Processing complete — DOCX is ready",
             current=total,
             total=total,
+            message="Processing complete — DOCX is ready",
             output=str(out),
         )
         log(job, "DOCX created successfully", "success")
@@ -289,15 +275,17 @@ def index():
 def health():
     return jsonify({
         "ok": True,
-        "model": MODEL_ID,
+        "engine": "local-gguf",
+        "modelRepo": MODEL_REPO,
+        "modelFile": MODEL_FILE,
         "modelLoaded": _model is not None,
-        "device": str(_device) if _device else None,
     })
 
 
 @app.post("/api/process-pdf")
 def process_pdf():
     uploaded = request.files.get("file")
+
     if not uploaded or not uploaded.filename.lower().endswith(".pdf"):
         return jsonify({"error": "Please upload a PDF file"}), 400
 
@@ -307,6 +295,7 @@ def process_pdf():
 
     uploaded.save(src)
     new_job(job)
+
     Thread(target=run_job, args=(job, src, out), daemon=True).start()
 
     return jsonify({
@@ -320,9 +309,11 @@ def process_pdf():
 def job_status(job):
     with _lock:
         data = _jobs.get(job)
-        if not data:
-            return jsonify({"error": "Job not found"}), 404
-        return jsonify({k: v for k, v in data.items() if k != "output"})
+
+    if not data:
+        return jsonify({"error": "Job not found"}), 404
+
+    return jsonify({k: v for k, v in data.items() if k != "output"})
 
 
 @app.get("/api/jobs/<job>/download")
@@ -337,6 +328,7 @@ def job_download(job):
         return jsonify({"error": "File not ready"}), 409
 
     path = Path(data["output"])
+
     if not path.exists():
         return jsonify({"error": "Output file no longer exists"}), 404
 
