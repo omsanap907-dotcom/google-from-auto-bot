@@ -1,13 +1,14 @@
 import os
 import re
-import json
 import uuid
 from pathlib import Path
 from threading import Lock, Thread
-from flask import Flask, jsonify, request, send_from_directory, send_file
-from pypdf import PdfReader
+
+import torch
+from flask import Flask, jsonify, request, send_file, send_from_directory
 from docx import Document
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from pypdf import PdfReader
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 APP_DIR = Path(__file__).resolve().parent
 WORK_DIR = APP_DIR / "work"
@@ -15,63 +16,141 @@ WORK_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__)
 _lock = Lock()
+_model_lock = Lock()
 _jobs = {}
 
-# Allow the GitHub Pages frontend to call this Railway API.
-@app.after_request
-def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    return response
+MODEL_ID = os.getenv("MODEL_ID", "Vamsi/T5_Paraphrase_Paws")
+HF_HOME = os.getenv("HF_HOME", str(APP_DIR / "hf-cache"))
+os.environ["HF_HOME"] = HF_HOME
 
-TARGET_URL = "https://exampdfx.com/paraphrasing-tool"
-MAX_CHARS = 2800
-MAX_LOGS = 200
-REQUEST_TIMEOUT_MS = 30000
-RESULT_TIMEOUT_SECONDS = 120
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "4"))
+MAX_UNIT_WORDS = int(os.getenv("MAX_UNIT_WORDS", "180"))
+MAX_INPUT_TOKENS = int(os.getenv("MAX_INPUT_TOKENS", "384"))
+MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "256"))
 
-
-def wc(s):
-    return len(re.findall(r"\S+", s or ""))
+_tokenizer = None
+_model = None
+_device = None
 
 
-def split_chunks(text, max_chars=MAX_CHARS):
-    """Split into chunks that stay safely below ExampdfX's 3000-char input limit."""
-    text = re.sub(r"\s+", " ", text or "").strip()
+def word_count(text):
+    return len(re.findall(r"\S+", text or ""))
+
+
+def clean_text(text):
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def extract_pages(path):
+    reader = PdfReader(str(path))
+    return [(page.extract_text() or "").strip() for page in reader.pages]
+
+
+def split_sentences(text):
+    text = clean_text(text)
     if not text:
         return []
 
-    words = text.split(" ")
-    chunks = []
+    protected = re.sub(
+        r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|Fig|Eq|No|vs|etc)\.",
+        lambda m: m.group(1) + "<DOT>",
+        text,
+        flags=re.I,
+    )
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", protected)
+    return [p.replace("<DOT>", ".").strip() for p in parts if p.strip()]
+
+
+def make_units(text, max_words=MAX_UNIT_WORDS):
+    sentences = split_sentences(text)
+    units = []
     current = []
 
-    for word in words:
-        candidate = word if not current else " ".join(current + [word])
-        if len(candidate) <= max_chars:
-            current.append(word)
+    def flush():
+        nonlocal current
+        if current:
+            units.append(" ".join(current).strip())
+            current = []
+
+    for sentence in sentences:
+        words = sentence.split()
+        if not words:
+            continue
+
+        if len(words) > max_words:
+            flush()
+            for i in range(0, len(words), max_words):
+                units.append(" ".join(words[i:i + max_words]))
+            continue
+
+        candidate = words if not current else current + words
+        if len(candidate) <= max_words:
+            current = candidate
         else:
-            if current:
-                chunks.append(" ".join(current))
-            # Extremely long tokens are split safely instead of exceeding the limit.
-            if len(word) > max_chars:
-                for i in range(0, len(word), max_chars):
-                    chunks.append(word[i:i + max_chars])
-                current = []
-            else:
-                current = [word]
+            flush()
+            current = words
 
-    if current:
-        chunks.append(" ".join(current))
-    return chunks
+    flush()
+    return units
 
 
-def extract(path):
-    parts = []
-    reader = PdfReader(str(path))
-    for page in reader.pages:
-        parts.append((page.extract_text() or "").strip())
-    return "\n\n".join(x for x in parts if x).strip()
+def init_model():
+    global _tokenizer, _model, _device
+    with _model_lock:
+        if _model is not None:
+            return
+
+        torch.set_num_threads(max(1, int(os.getenv("TORCH_THREADS", "2"))))
+        _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+        _model = AutoModelForSeq2SeqLM.from_pretrained(
+            MODEL_ID,
+            low_cpu_mem_usage=True,
+        ).to(_device)
+        _model.eval()
+
+
+def paraphrase_batch(texts):
+    init_model()
+
+    prompts = ["paraphrase: " + clean_text(t) for t in texts]
+    encoded = _tokenizer(
+        prompts,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=MAX_INPUT_TOKENS,
+    )
+    encoded = {k: v.to(_device) for k, v in encoded.items()}
+
+    with torch.inference_mode():
+        outputs = _model.generate(
+            **encoded,
+            num_beams=4,
+            max_new_tokens=MAX_OUTPUT_TOKENS,
+            repetition_penalty=1.15,
+            no_repeat_ngram_size=3,
+            early_stopping=True,
+        )
+
+    results = _tokenizer.batch_decode(outputs, skip_special_tokens=True)
+    final = []
+
+    for original, rewritten in zip(texts, results):
+        rewritten = clean_text(rewritten)
+
+        if word_count(rewritten) < max(5, int(word_count(original) * 0.25)):
+            final.append(original)
+            continue
+
+        if rewritten.casefold() == clean_text(original).casefold():
+            final.append(original)
+            continue
+
+        final.append(rewritten)
+
+    return final
 
 
 def new_job(job):
@@ -87,427 +166,112 @@ def new_job(job):
         }
 
 
-def update(job, **kw):
+def update(job, **kwargs):
     with _lock:
         if job in _jobs:
-            _jobs[job].update(kw)
+            _jobs[job].update(kwargs)
 
 
 def log(job, message, level="info"):
     from datetime import datetime
+
     with _lock:
         if job not in _jobs:
             return
-        j = _jobs[job]
+
         entry = {
             "time": datetime.now().strftime("%H:%M:%S"),
             "message": message,
             "level": level,
         }
-        j["logs"].append(entry)
+        _jobs[job]["logs"].append(entry)
+        _jobs[job]["logs"] = _jobs[job]["logs"][-300:]
         print(f"[{entry['time']}] {level.upper()}: {message}", flush=True)
-        j["logs"] = j["logs"][-MAX_LOGS:]
 
 
-def visible(page, selectors):
-    for sel in selectors:
-        loc = page.locator(sel)
-        for i in range(loc.count()):
-            el = loc.nth(i)
-            try:
-                if el.is_visible():
-                    return el
-            except Exception:
-                pass
-    return None
-
-
-def text_or_value(el):
-    try:
-        value = el.input_value(timeout=500)
-        if value:
-            return value
-    except Exception:
-        pass
-    try:
-        return el.inner_text(timeout=500)
-    except Exception:
-        try:
-            return el.text_content(timeout=500) or ""
-        except Exception:
-            return ""
-
-
-def find_button(page, wanted):
-    selectors = "button, [role='button'], input[type='submit'], input[type='button']"
-    frames = [page] + list(page.frames)
-    for root in frames:
-        try:
-            loc = root.locator(selectors)
-            for i in range(loc.count()):
-                el = loc.nth(i)
-                try:
-                    if not el.is_visible():
-                        continue
-                    bits = [
-                        el.inner_text() or "",
-                        el.get_attribute("value") or "",
-                        el.get_attribute("aria-label") or "",
-                        el.get_attribute("title") or "",
-                    ]
-                    label = " ".join(bits).strip().casefold()
-                    if wanted.casefold() in label:
-                        return el
-                except Exception:
-                    pass
-        except Exception:
-            pass
-    return None
-
-
-def get_input(page):
-    # Find the editor in the main document or any same-origin iframe.
-    selectors = [
-        "textarea:not([readonly]):not([disabled])",
-        "textarea",
-        "[role='textbox']:not([readonly]):not([disabled])",
-        "[contenteditable='true']",
-        "input[type='text']:not([readonly]):not([disabled])",
-    ]
-    frames = [page] + list(page.frames)
-    for root in frames:
-        for sel in selectors:
-            try:
-                loc = root.locator(sel)
-                for i in range(loc.count()):
-                    el = loc.nth(i)
-                    try:
-                        if el.is_visible():
-                            return el
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-    return None
-
-
-def collect_output_candidates(page, original):
-    candidates = []
-    selectors = [
-        "#output",
-        "#result",
-        "#paraphrased",
-        "#paraphrase-output",
-        ".output",
-        ".result",
-        ".rewritten",
-        "[class*='output' i]",
-        "[class*='result' i]",
-        "[class*='paraph' i]",
-        "textarea[readonly]",
-        "textarea[disabled]",
-        "[contenteditable='true']",
-    ]
-
-    for selector in selectors:
-        try:
-            loc = page.locator(selector)
-            for i in range(loc.count()):
-                el = loc.nth(i)
-                try:
-                    if not el.is_visible():
-                        continue
-                    txt = text_or_value(el).strip()
-                    if not txt:
-                        continue
-                    if txt == original.strip():
-                        continue
-                    if wc(txt) < 5:
-                        continue
-                    # Avoid accidentally treating the page's own UI copy as the result.
-                    if len(txt) > max(len(original) * 2.5, 12000):
-                        continue
-                    candidates.append(txt)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    # Prefer the longest plausible rewritten text.
-    candidates.sort(key=lambda x: (wc(x), len(x)), reverse=True)
-    return candidates
-
-
-def collect_generic_text_candidates(page, original):
-    """Fallback detector for output containers whose IDs/classes are unknown."""
-    result = []
-    try:
-        rows = page.evaluate("""
-        () => Array.from(document.querySelectorAll(
-          'textarea, [contenteditable="true"], div, p, span, article, section'
-        )).map(el => {
-          const r = el.getBoundingClientRect();
-          const raw = ('value' in el && el.value) ? el.value : (el.innerText || el.textContent || '');
-          return {
-            tag: el.tagName,
-            id: el.id || '',
-            cls: typeof el.className === 'string' ? el.className : '',
-            text: raw.trim(),
-            visible: !!(r.width && r.height && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'),
-            childCount: el.children.length
-          };
-        })
-        """)
-        original_norm = re.sub(r"\s+", " ", original or "").strip()
-        for row in rows:
-            if not row.get("visible"):
-                continue
-            txt = re.sub(r"\s+", " ", row.get("text") or "").strip()
-            if len(txt) < 40 or txt == original_norm:
-                continue
-            if len(txt) > max(len(original_norm) * 2.5, 12000):
-                continue
-            low = txt.casefold()
-            if "free paraphrasing tool" in low and len(txt) > len(original_norm) * 1.5:
-                continue
-            result.append(txt)
-    except Exception:
-        pass
-    target = wc(original)
-    result.sort(key=lambda x: (abs(wc(x) - target), -len(x)))
-    return result
-
-
-def process_chunk(job, page, text, number, total):
-    page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT_MS)
-    page.wait_for_timeout(4000)
-
-    inp = get_input(page)
-    if not inp:
-        # Some client-side apps populate after load; give them another few seconds.
-        page.wait_for_timeout(6000)
-        inp = get_input(page)
-    if not inp:
-        try:
-            details = page.evaluate("""
-            () => ({
-              frames: Array.from(document.querySelectorAll('iframe')).map(f => ({
-                src: f.src || '', title: f.title || ''
-              })),
-              textareas: document.querySelectorAll('textarea').length,
-              textboxes: document.querySelectorAll('[role="textbox"]').length,
-              contenteditables: document.querySelectorAll('[contenteditable="true"]').length,
-              body: (document.body.innerText || '').slice(0, 1500)
-            })
-            """)
-            log(job, f"Input diagnostic: {json.dumps(details)[:1800]}", "error")
-        except Exception:
-            pass
-        raise RuntimeError("ExampdfX input box not detected")
-
-    inp.fill(text)
-    log(job, f"Chunk {number}/{total}: entered {len(text)} characters")
-
-    # Formal mode is appropriate for an academic/project document.
-    mode = find_button(page, "Formal")
-    if mode:
-        try:
-            mode.click()
-            page.wait_for_timeout(300)
-            log(job, "Formal rewrite mode selected")
-        except Exception as e:
-            log(job, f"Could not select Formal mode: {e}", "info")
-
-    btn = find_button(page, "Paraphrase Now")
-    if not btn:
-        raise RuntimeError("ExampdfX 'Paraphrase Now' button not detected")
-
-    # Watch the rendered page for the result. Do not synchronously read response
-    # bodies because OpenRouter may use a streaming response that never completes.
-    dom_changes = []
-    try:
-        page.evaluate("""
-        () => {
-          window.__paraphraseChanges = [];
-          const normalize = s => (s || '').replace(/\\s+/g, ' ').trim();
-          const observer = new MutationObserver(() => {
-            const values = Array.from(document.querySelectorAll(
-              'textarea, [contenteditable="true"], div, p, span, article, section'
-            )).map(el => ('value' in el && el.value) ? el.value : (el.innerText || ''))
-             .map(normalize)
-             .filter(x => x.length >= 40);
-            const uniq = [...new Set(values)];
-            window.__paraphraseChanges = uniq.slice(-80);
-          });
-          observer.observe(document.body, {subtree:true, childList:true, characterData:true, attributes:true, attributeFilter:['value','class','style']});
-        }
-        """)
-        log(job, "DOM change watcher enabled")
-    except Exception as e:
-        log(job, f"Could not enable DOM watcher: {e}", "info")
-
-    def _resp(resp):
-        try:
-            u = resp.url
-            if "exampdfx.com" in u or "openrouter.ai" in u:
-                log(job, f"Network: {resp.status} {resp.request.method} {u[:180]}")
-        except Exception:
-            pass
-
-    def _failed(req):
-        try:
-            if "exampdfx.com" in req.url or "openrouter.ai" in req.url:
-                log(job, f"Request failed: {req.method} {req.url[:180]} :: {req.failure}", "error")
-        except Exception:
-            pass
-
-    try:
-        page.on("response", _resp)
-        page.on("requestfailed", _failed)
-        page.on("console", lambda msg: log(job, f"Browser console: {msg.type} {msg.text[:300]}", "info"))
-        log(job, "Browser/network diagnostics enabled")
-    except Exception as e:
-        log(job, f"Could not attach diagnostics: {e}", "info")
-
-    btn.click(force=True)
-    log(job, f"Chunk {number}/{total}: submitted to ExampdfX")
-
-    deadline_ms = RESULT_TIMEOUT_SECONDS * 1000
-    elapsed = 0
-
-    while elapsed < deadline_ms:
-        page.wait_for_timeout(1000)
-        elapsed += 1000
-
-        try:
-            changed = page.evaluate("() => window.__paraphraseChanges || []")
-        except Exception:
-            changed = []
-
-        # Prefer rendered text collected by the MutationObserver.
-        plausible = []
-        original_norm = re.sub(r"\\s+", " ", text or "").strip()
-        for candidate in changed:
-            candidate = re.sub(r"\\s+", " ", candidate or "").strip()
-            if candidate and candidate != original_norm and wc(candidate) >= max(5, int(wc(text) * 0.15)):
-                if len(candidate) <= max(len(text) * 2.5, 12000):
-                    plausible.append(candidate)
-
-        candidates = plausible or collect_output_candidates(page, text)
-        if not candidates:
-            candidates = collect_generic_text_candidates(page, text)
-
-        if candidates:
-            candidates.sort(key=lambda x: (wc(x), len(x)), reverse=True)
-            result = candidates[0]
-            if wc(result) >= max(5, int(wc(text) * 0.15)):
-                log(job, f"Detected rewritten text ({wc(result)} words)", "success")
-                return result
-
-        # Stop early only when the page clearly reports a target/API error.
-        try:
-            body = (page.locator("body").inner_text(timeout=1000) or "").strip()
-            low = body.casefold()
-            error_markers = [
-                "something went wrong", "error generating", "failed to generate",
-                "too many requests", "rate limit", "api error", "network error",
-                "failed to paraphrase", "unable to paraphrase"
-            ]
-            hit = next((m for m in error_markers if m in low), None)
-            if hit:
-                log(job, f"ExampdfX page reports: {hit}", "error")
-                break
-        except Exception:
-            pass
-
-    # Diagnostic screenshot and DOM summary make failures visible in the UI/Railway logs.
-    diag = WORK_DIR / f"{job}_chunk_{number}_debug.png"
-    try:
-        page.screenshot(path=str(diag), full_page=False)
-        log(job, f"Chunk {number}: result not detected after {RESULT_TIMEOUT_SECONDS}s; diagnostic screenshot saved", "error")
-    except Exception as e:
-        log(job, f"Diagnostic screenshot failed: {e}", "error")
-    try:
-        diag_text = page.locator("body").inner_text(timeout=3000).strip()
-        log(job, f"Page text after timeout: {diag_text[:1200]}", "error")
-        log(job, f"Frames: {len(page.frames)}", "info")
-    except Exception as e:
-        log(job, f"DOM diagnostic failed: {e}", "error")
-
-    raise RuntimeError(f"ExampdfX did not return rewritten text for chunk {number} within {RESULT_TIMEOUT_SECONDS} seconds")
-
-
-def make_docx(parts, path):
+def make_docx(page_results, path):
     doc = Document()
-    title = doc.add_heading("Processed Document", level=1)
-    for i, part in enumerate(parts):
-        if i:
-            doc.add_paragraph()
-        for paragraph in re.split(r"\n\s*\n", part):
-            if paragraph.strip():
-                doc.add_paragraph(paragraph.strip())
+    first = True
+
+    for page_no, blocks in page_results:
+        if not first:
+            doc.add_page_break()
+        first = False
+
+        for block in blocks:
+            if block.strip():
+                doc.add_paragraph(block.strip())
+
     doc.save(path)
 
 
 def run_job(job, src, out):
     try:
-        update(job, status="Reading", message="Extracting PDF text...")
-        text = extract(src)
-        if not text:
+        pages = extract_pages(src)
+        if not any(clean_text(p) for p in pages):
             raise RuntimeError("No extractable text found in PDF")
 
-        chunks = split_chunks(text)
-        if not chunks:
+        page_units = []
+        for page_no, page_text in enumerate(pages, 1):
+            for unit in make_units(page_text):
+                page_units.append((page_no, unit))
+
+        if not page_units:
             raise RuntimeError("No text chunks were created")
 
+        total = len(page_units)
         update(
             job,
             status="Running",
-            message=f"Starting ExampdfX processing: {len(chunks)} chunks",
+            message=f"Starting local paraphrasing: {total} text chunks",
             current=0,
-            total=len(chunks),
+            total=total,
         )
-        log(job, f"Job started: {len(chunks)} chunks, max {MAX_CHARS} characters each")
+        log(job, f"Loaded PDF: {len(pages)} pages, {total} chunks")
+        log(job, f"Local model: {MODEL_ID}")
 
-        done = []
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
-            context = browser.new_context(
-                viewport={"width": 1280, "height": 900},
-                locale="en-US",
+        results_by_page = {}
+        completed = 0
+
+        update(job, message="Loading paraphrasing model (first run can take a while)...")
+        init_model()
+        log(job, "Paraphrasing model loaded", "success")
+
+        for start in range(0, total, BATCH_SIZE):
+            batch = page_units[start:start + BATCH_SIZE]
+            texts = [x[1] for x in batch]
+            rewritten = paraphrase_batch(texts)
+
+            for (page_no, _), result in zip(batch, rewritten):
+                results_by_page.setdefault(page_no, []).append(result)
+
+            completed += len(batch)
+            update(
+                job,
+                current=completed,
+                message=f"Paraphrasing chunk {completed}/{total}",
             )
-            page = context.new_page()
-            try:
-                for n, chunk in enumerate(chunks, 1):
-                    update(
-                        job,
-                        message=f"Processing chunk {n}/{len(chunks)}",
-                        current=n - 1,
-                        total=len(chunks),
-                    )
-                    log(job, f"Starting chunk {n}/{len(chunks)} ({len(chunk)} chars, {wc(chunk)} words)")
-                    result = process_chunk(job, page, chunk, n, len(chunks))
-                    done.append(result)
-                    update(job, current=n)
-                    log(job, f"Chunk {n}/{len(chunks)} completed ({wc(result)} output words)", "success")
-            finally:
-                context.close()
-                browser.close()
+            log(job, f"Completed {completed}/{total} chunks", "success")
 
-        make_docx(done, out)
+        page_results = [
+            (page_no, results_by_page.get(page_no, []))
+            for page_no in range(1, len(pages) + 1)
+        ]
+        make_docx(page_results, out)
+
         update(
             job,
             status="Completed",
-            message="All chunks processed by ExampdfX",
-            current=len(chunks),
-            total=len(chunks),
+            message="Processing complete — DOCX is ready",
+            current=total,
+            total=total,
             output=str(out),
         )
         log(job, "DOCX created successfully", "success")
 
-    except Exception as e:
-        update(job, status="Error", message=str(e), error=str(e))
-        log(job, f"Error: {e}", "error")
+    except Exception as exc:
+        update(job, status="Error", message=str(exc), error=str(exc))
+        log(job, f"Error: {exc}", "error")
     finally:
         try:
             src.unlink()
@@ -515,85 +279,43 @@ def run_job(job, src, out):
             pass
 
 
-@app.get("/api/inspect-live")
-def inspect_live():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        events = []
-        try:
-            def _capture(resp):
-                try:
-                    if "exampdfx.com" in resp.url or "openrouter.ai" in resp.url:
-                        events.append({"status": resp.status, "url": resp.url[:220]})
-                except Exception:
-                    pass
-            page.on("response", _capture)
-            page.goto(TARGET_URL, wait_until="networkidle", timeout=REQUEST_TIMEOUT_MS)
-            page.wait_for_timeout(1000)
-            data = page.evaluate("""
-            () => ({
-              title: document.title,
-              url: location.href,
-              body: (document.body.innerText || '').slice(0, 8000),
-              inputs: Array.from(document.querySelectorAll('textarea,input,[contenteditable="true"]')).map(el => ({
-                tag: el.tagName, id: el.id || '', cls: typeof el.className === 'string' ? el.className : '',
-                placeholder: el.getAttribute('placeholder') || '',
-                readonly: !!el.readOnly,
-                disabled: !!el.disabled
-              })),
-              buttons: Array.from(document.querySelectorAll('button,[role="button"],input[type="button"],input[type="submit"]')).map(el => ({
-                tag: el.tagName, text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim()
-              })).filter(x => x.text)
-            })
-            """)
-            data["network"] = events[-30:]
-            return jsonify(data)
-        finally:
-            browser.close()
+@app.get("/")
+def index():
+    response = send_from_directory(APP_DIR, "index.html")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
-@app.post("/api/inspect")
-def inspect():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        try:
-            page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT_MS)
-            page.wait_for_timeout(1500)
-            inp = get_input(page)
-            btn = find_button(page, "Paraphrase Now")
-            formal = find_button(page, "Formal")
-            return jsonify({
-                "url": page.url,
-                "title": page.title(),
-                "inputDetected": bool(inp),
-                "buttonDetected": bool(btn),
-                "formalModeDetected": bool(formal),
-                "maxCharacters": MAX_CHARS,
-                "siteLimitCharacters": 3000,
-            })
-        finally:
-            browser.close()
+@app.get("/api/health")
+def health():
+    return jsonify({
+        "ok": True,
+        "model": MODEL_ID,
+        "modelLoaded": _model is not None,
+        "device": str(_device) if _device else None,
+    })
 
 
 @app.post("/api/process-pdf")
 def process_pdf():
-    f = request.files.get("file")
-    if not f or not f.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "Upload a PDF file"}), 400
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "Please upload a PDF file"}), 400
 
     job = uuid.uuid4().hex
     src = WORK_DIR / f"{job}.pdf"
     out = WORK_DIR / f"{job}_processed.docx"
-    f.save(src)
-    new_job(job)
 
+    uploaded.save(src)
+    new_job(job)
     Thread(target=run_job, args=(job, src, out), daemon=True).start()
+
     return jsonify({
         "jobId": job,
         "status": "Queued",
-        "message": "Upload complete. Background ExampdfX job started.",
+        "message": "Upload complete. Local paraphrasing job started.",
     }), 202
 
 
@@ -610,8 +332,10 @@ def job_status(job):
 def job_download(job):
     with _lock:
         data = _jobs.get(job)
+
     if not data:
         return jsonify({"error": "Job not found"}), 404
+
     if data["status"] != "Completed" or not data.get("output"):
         return jsonify({"error": "File not ready"}), 409
 
@@ -622,38 +346,9 @@ def job_download(job):
     return send_file(
         path,
         as_attachment=True,
-        download_name="exampdfx_processed_document.docx",
+        download_name="processed_document.docx",
     )
 
 
-@app.get("/api/logs")
-def logs():
-    with _lock:
-        if not _jobs:
-            return jsonify({
-                "status": "Idle",
-                "message": "",
-                "current": 0,
-                "total": 0,
-                "logs": [],
-            })
-        job = next(reversed(_jobs))
-        return jsonify(_jobs[job])
-
-
-@app.get("/api/status")
-def status():
-    return logs()
-
-
-@app.get("/")
-def index():
-    response = send_from_directory(APP_DIR, "index.html")
-    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
-
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "10000")))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
