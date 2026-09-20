@@ -1,23 +1,28 @@
 # PDF Paraphrasing Processor
 
-A Railway/Flask application that:
+Self-contained PDF-to-DOCX paraphrasing service using Flask and an open-source T5 paraphrasing model.
 
-1. accepts a PDF,
-2. extracts text with pypdf,
-3. splits it into chunks below ExampdfX's documented 3,000-character input limit,
-4. submits each chunk to the ExampdfX paraphrasing tool in Formal mode,
-5. combines the rewritten chunks into a DOCX.
+The final version does not automate ExampdfX or another third-party webpage. It performs English paraphrasing locally with Vamsi/T5_Paraphrase_Paws and Hugging Face Transformers.
 
-Target site: https://exampdfx.com/paraphrasing-tool
+Workflow:
+1. Upload PDF.
+2. Extract text page by page.
+3. Split into model-sized chunks.
+4. Paraphrase in batches.
+5. Rebuild the pages into a DOCX.
+6. Download the DOCX.
 
-ExampdfX currently advertises free/no-login paraphrasing, five rewrite modes, and up to 3,000 characters per request. This project uses a 2,800-character safety limit per request.
+The Hugging Face model card identifies Vamsi/T5_Paraphrase_Paws as an English paraphrase-generation T5 model trained on PAWS and documents direct Transformers usage.
 
-## Run locally
+Important: this tool cannot guarantee a particular plagiarism-checker score. Keep required citations and review the rewritten document.
 
-```bash
-pip install -r requirements.txt
-python -m playwright install chromium
-python formpilot.py
-```
+Environment variables:
+MODEL_ID
+BATCH_SIZE
+MAX_UNIT_WORDS
+MAX_INPUT_TOKENS
+MAX_OUTPUT_TOKENS
+TORCH_THREADS
 
-The application processes the target website with Playwright. Because it depends on a third-party webpage, selectors or behavior can change. No CAPTCHA-solving or CAPTCHA bypass is implemented.
+Default model:
+Vamsi/T5_Paraphrase_Paws
