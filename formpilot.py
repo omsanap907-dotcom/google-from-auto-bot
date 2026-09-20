@@ -28,7 +28,7 @@ TARGET_URL = "https://exampdfx.com/paraphrasing-tool"
 MAX_CHARS = 2800
 MAX_LOGS = 200
 REQUEST_TIMEOUT_MS = 30000
-RESULT_TIMEOUT_SECONDS = 60
+RESULT_TIMEOUT_SECONDS = 120
 
 
 def wc(s):
@@ -212,6 +212,46 @@ def collect_output_candidates(page, original):
     return candidates
 
 
+def collect_generic_text_candidates(page, original):
+    """Fallback detector for output containers whose IDs/classes are unknown."""
+    result = []
+    try:
+        rows = page.evaluate("""
+        () => Array.from(document.querySelectorAll(
+          'textarea, [contenteditable="true"], div, p, span, article, section'
+        )).map(el => {
+          const r = el.getBoundingClientRect();
+          const raw = ('value' in el && el.value) ? el.value : (el.innerText || el.textContent || '');
+          return {
+            tag: el.tagName,
+            id: el.id || '',
+            cls: typeof el.className === 'string' ? el.className : '',
+            text: raw.trim(),
+            visible: !!(r.width && r.height && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'),
+            childCount: el.children.length
+          };
+        })
+        """)
+        original_norm = re.sub(r"\s+", " ", original or "").strip()
+        for row in rows:
+            if not row.get("visible"):
+                continue
+            txt = re.sub(r"\s+", " ", row.get("text") or "").strip()
+            if len(txt) < 40 or txt == original_norm:
+                continue
+            if len(txt) > max(len(original_norm) * 2.5, 12000):
+                continue
+            low = txt.casefold()
+            if "free paraphrasing tool" in low and len(txt) > len(original_norm) * 1.5:
+                continue
+            result.append(txt)
+    except Exception:
+        pass
+    target = wc(original)
+    result.sort(key=lambda x: (abs(wc(x) - target), -len(x)))
+    return result
+
+
 def process_chunk(job, page, text, number, total):
     page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT_MS)
     page.wait_for_timeout(1500)
@@ -238,6 +278,19 @@ def process_chunk(job, page, text, number, total):
         raise RuntimeError("ExampdfX 'Paraphrase Now' button not detected")
 
     # Snapshot current visible output-like fields before submission.
+    def _resp(resp):
+        try:
+            u = resp.url
+            if "exampdfx.com" in u or "openrouter.ai" in u:
+                log(job, f"Network: {resp.status} {resp.request.method} {u[:180]}")
+        except Exception:
+            pass
+    try:
+        page.on("response", _resp)
+        page.on("console", lambda msg: log(job, f"Browser console: {msg.type} {msg.text[:180]}", "info"))
+    except Exception:
+        pass
+
     btn.click(force=True)
     log(job, f"Chunk {number}/{total}: submitted to ExampdfX")
 
@@ -248,9 +301,10 @@ def process_chunk(job, page, text, number, total):
         elapsed += 1000
 
         candidates = collect_output_candidates(page, text)
+        if not candidates:
+            candidates = collect_generic_text_candidates(page, text)
         if candidates:
             result = candidates[0]
-            # Ensure we don't accept a tiny UI fragment.
             if wc(result) >= max(5, int(wc(text) * 0.25)):
                 return result
 
@@ -341,6 +395,44 @@ def run_job(job, src, out):
             src.unlink()
         except Exception:
             pass
+
+
+@app.get("/api/inspect-live")
+def inspect_live():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        events = []
+        try:
+            def _capture(resp):
+                try:
+                    if "exampdfx.com" in resp.url or "openrouter.ai" in resp.url:
+                        events.append({"status": resp.status, "url": resp.url[:220]})
+                except Exception:
+                    pass
+            page.on("response", _capture)
+            page.goto(TARGET_URL, wait_until="networkidle", timeout=REQUEST_TIMEOUT_MS)
+            page.wait_for_timeout(1000)
+            data = page.evaluate("""
+            () => ({
+              title: document.title,
+              url: location.href,
+              body: (document.body.innerText || '').slice(0, 8000),
+              inputs: Array.from(document.querySelectorAll('textarea,input,[contenteditable="true"]')).map(el => ({
+                tag: el.tagName, id: el.id || '', cls: typeof el.className === 'string' ? el.className : '',
+                placeholder: el.getAttribute('placeholder') || '',
+                readonly: !!el.readOnly,
+                disabled: !!el.disabled
+              })),
+              buttons: Array.from(document.querySelectorAll('button,[role="button"],input[type="button"],input[type="submit"]')).map(el => ({
+                tag: el.tagName, text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim()
+              })).filter(x => x.text)
+            })
+            """)
+            data["network"] = events[-30:]
+            return jsonify(data)
+        finally:
+            browser.close()
 
 
 @app.post("/api/inspect")
