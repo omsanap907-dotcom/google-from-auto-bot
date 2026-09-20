@@ -1,122 +1,80 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PDF Paraphrasing Processor • v3</title>
+<title>PDF Paraphrasing Processor</title>
 <style>
-body{font-family:system-ui,Arial;max-width:1000px;margin:auto;padding:16px;background:#f5f5f5;color:#171717}
-.card{background:#fff;padding:20px;border:1px solid #ddd;border-radius:14px}
-.button{padding:12px 16px;margin-top:12px;border:0;border-radius:9px;background:#111;color:#fff;font-weight:600;width:100%}
-.status{display:flex;justify-content:space-between;margin-top:18px;font-weight:600}
-#bar{height:10px;background:#ddd;margin-top:12px;border-radius:99px;overflow:hidden}
-#fill{height:100%;background:#222;width:0;transition:width .3s}
-#logbox{margin-top:18px;border:1px solid #ddd;border-radius:10px;background:#101010;color:#eee;height:300px;overflow:auto;padding:10px;font-family:monospace;font-size:12px}
-.log{padding:5px 2px;border-bottom:1px solid #252525}.time{color:#999}.success{color:#8fdf9b}.error{color:#ff8d8d}
-.small,.hint{color:#666;font-size:13px}
-#job{font-family:monospace;font-size:11px;word-break:break-all}
-.info{margin-top:16px;padding:12px;border-radius:10px;background:#f3f3f3}
+:root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f4f5f7}
+*{box-sizing:border-box}
+body{margin:0;padding:22px}
+.wrap{max-width:980px;margin:0 auto}
+.card{background:#fff;border:1px solid #dedede;border-radius:18px;padding:24px;box-shadow:0 8px 30px rgba(0,0,0,.05)}
+h1{margin:0 0 8px;font-size:28px}.sub{color:#666;margin:0 0 18px;line-height:1.5}
+.info{padding:13px 15px;border-radius:12px;background:#f0f1f3;margin-bottom:18px;line-height:1.5}
+input[type=file]{width:100%;padding:10px;border:1px solid #ccc;border-radius:10px}
+button{width:100%;border:0;border-radius:10px;background:#111;color:#fff;padding:13px 15px;margin-top:12px;font-size:15px;font-weight:700;cursor:pointer}
+button:disabled{opacity:.6;cursor:not-allowed}.row{display:flex;justify-content:space-between;gap:16px;margin-top:20px;font-weight:700}
+.bar{height:11px;background:#dedede;border-radius:999px;overflow:hidden;margin-top:10px}.fill{height:100%;width:0;background:#111;transition:width .3s}
+.job{font-size:12px;color:#777;margin-top:9px;word-break:break-all}.logs{margin-top:18px;background:#111;color:#eee;border-radius:13px;padding:12px;height:320px;overflow:auto;font:12px/1.55 Consolas,monospace}
+.log{padding:5px 2px;border-bottom:1px solid #292929}.time{color:#888}.success{color:#8fdf9b}.error{color:#ff8c8c}
+.download{display:none}.note{margin-top:14px;font-size:13px;color:#666}
+@media(max-width:600px){body{padding:12px}.card{padding:17px}h1{font-size:23px}.logs{height:280px}}
 </style>
 </head>
 <body>
-<div class="card">
-<h1>PDF Paraphrasing Processor <span style="font-size:12px;color:#666">v4</span></h1>
-<p>Upload a PDF. The processor extracts the text, splits it below ExampdfX's 3,000-character input limit, sends each chunk in <b>Formal</b> mode, then creates a DOCX.</p>
-<div class="info">Backend: Railway • Rewriter: ExampdfX • Chunks: up to 2,800 characters</div>
-
+<div class="wrap"><div class="card">
+<h1>PDF Paraphrasing Processor</h1>
+<p class="sub">Upload a PDF and receive a rewritten DOCX. This final version uses a local open-source paraphrasing model and does not depend on CAPTCHA or a third-party website.</p>
+<div class="info"><b>Engine:</b> Vamsi/T5_Paraphrase_Paws &nbsp;•&nbsp; <b>Processing:</b> local on Railway</div>
 <input id="file" type="file" accept=".pdf">
-<button class="button" onclick="run()">Start processing</button>
-
-<div class="status"><span id="status">Idle</span><span id="count">0 / 0</span></div>
-<div id="bar"><div id="fill"></div></div>
-<p class="small">Job ID: <span id="job">—</span></p>
-
-<div id="logbox"></div>
-<button id="download" class="button" style="display:none" onclick="downloadFile()">Download DOCX</button>
-</div>
+<button id="start" onclick="run()">Start processing</button>
+<div class="row"><span id="status">Idle</span><span id="count">0 / 0</span></div>
+<div class="bar"><div class="fill" id="fill"></div></div>
+<div class="job">Job ID: <span id="job">—</span></div>
+<div class="logs" id="logs"></div>
+<button class="download" id="download" onclick="downloadFile()">Download DOCX</button>
+<div class="note">No paraphrasing system can guarantee a specific plagiarism-checker score. Review the rewritten document and keep citations for source material.</div>
+</div></div>
 
 <script>
-const DEFAULT_API="https://document-processor-exampdfx-production.up.railway.app";
-const API_BASE=(location.hostname.endsWith(".up.railway.app") ? location.origin : DEFAULT_API);
 const $=id=>document.getElementById(id);
 let jobId=null;
 
-async function readResponse(r){
- const text=await r.text();
- let data=null;
- try{data=JSON.parse(text)}catch(e){}
- if(!r.ok){
-   throw Error((data&&data.error)||('Backend returned HTTP '+r.status));
- }
- if(data===null) throw Error('Backend returned a non-JSON response');
+async function jsonResponse(r){
+ const text=await r.text(); let data;
+ try{data=JSON.parse(text)}catch{throw new Error("Server returned an invalid response")}
+ if(!r.ok)throw new Error(data.error||("HTTP "+r.status));
  return data;
 }
 
 async function run(){
- const f=$('file').files[0];
- if(!f){$('status').textContent='Select a PDF';return;}
- $('status').textContent='Uploading PDF...';
- $('download').style.display='none';
- $('logbox').innerHTML='';
- $('job').textContent='—';
- $('count').textContent='0 / 0';
- $('fill').style.width='0%';
-
- const fd=new FormData();
- fd.append('file',f);
-
+ const file=$("file").files[0];
+ if(!file){$("status").textContent="Choose a PDF first";return}
+ $("start").disabled=true;$("download").style.display="none";$("logs").innerHTML="";
+ $("job").textContent="—";$("count").textContent="0 / 0";$("fill").style.width="0%";$("status").textContent="Uploading…";
  try{
-  const r=await fetch(API_BASE+'/api/process-pdf',{method:'POST',body:fd});
-  const d=await readResponse(r);
-  jobId=d.jobId;
-  $('job').textContent=jobId;
-  $('status').textContent=d.message||d.status||'Queued';
-  await refresh();
- }catch(e){
-  $('status').textContent=e.message;
-  $('logbox').innerHTML='<div class="log error">'+esc(e.message)+'</div>';
- }
+  const fd=new FormData();fd.append("file",file);
+  const r=await fetch("/api/process-pdf",{method:"POST",body:fd});
+  const d=await jsonResponse(r);jobId=d.jobId;$("job").textContent=jobId;refresh();
+ }catch(e){$("status").textContent=e.message;$("logs").innerHTML='<div class="log error">'+esc(e.message)+'</div>';$("start").disabled=false}
 }
 
 async function refresh(){
  if(!jobId)return;
  try{
-  const r=await fetch(API_BASE+'/api/jobs/'+encodeURIComponent(jobId));
-  if(r.status===404){
-    jobId=null;
-    $('status').textContent='Previous job expired. Start a new job.';
-    $('count').textContent='0 / 0';
-    $('job').textContent='—';
-    $('fill').style.width='0%';
-    $('logbox').innerHTML='<div class="log error">The server was redeployed and cleared the previous in-memory job. Upload the PDF again.</div>';
-    return;
-  }
-  const d=await readResponse(r);
-
-  $('status').textContent=d.message||d.status;
-  $('count').textContent=(d.current||0)+' / '+(d.total||0);
-  if(d.total)$('fill').style.width=(d.current/d.total*100)+'%';
-
-  $('logbox').innerHTML=(d.logs||[]).map(x=>
-    '<div class="log '+esc(x.level||'info')+'"><span class="time">['+esc(x.time||'')+']</span> '+esc(x.message||'')+'</div>'
-  ).join('');
-  $('logbox').scrollTop=$('logbox').scrollHeight;
-
-  if(d.status==='Completed')$('download').style.display='block';
- }catch(e){
-  if(jobId)$('status').textContent=e.message;
- }
+  const r=await fetch("/api/jobs/"+encodeURIComponent(jobId),{cache:"no-store"});const d=await jsonResponse(r);
+  $("status").textContent=d.message||d.status;$("count").textContent=(d.current||0)+" / "+(d.total||0);
+  $("fill").style.width=d.total?((d.current/d.total)*100)+"%":"0%";
+  $("logs").innerHTML=(d.logs||[]).map(x=>'<div class="log '+esc(x.level||"info")+'"><span class="time">['+esc(x.time||"")+']</span> '+esc(x.message||"")+'</div>').join("");
+  $("logs").scrollTop=$("logs").scrollHeight;
+  if(d.status==="Completed"){$("download").style.display="block";$("start").disabled=false}
+  if(d.status==="Error")$("start").disabled=false;
+ }catch(e){$("status").textContent=e.message}
 }
 
-function esc(s){
- return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-}
-
-function downloadFile(){
- if(jobId)window.location.href=API_BASE+'/api/jobs/'+encodeURIComponent(jobId)+'/download';
-}
-
+function esc(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"}[m]))}
+function downloadFile(){if(jobId)location.href="/api/jobs/"+encodeURIComponent(jobId)+"/download"}
 setInterval(refresh,1000);
 </script>
-</body>
-</html>
+</body></html>
