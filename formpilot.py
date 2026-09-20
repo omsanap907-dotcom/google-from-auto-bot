@@ -139,33 +139,56 @@ def text_or_value(el):
 
 
 def find_button(page, wanted):
-    loc = page.locator("button, [role='button'], input[type='submit'], input[type='button']")
-    for i in range(loc.count()):
-        el = loc.nth(i)
+    selectors = "button, [role='button'], input[type='submit'], input[type='button']"
+    frames = [page] + list(page.frames)
+    for root in frames:
         try:
-            if not el.is_visible():
-                continue
-            bits = [
-                el.inner_text() or "",
-                el.get_attribute("value") or "",
-                el.get_attribute("aria-label") or "",
-                el.get_attribute("title") or "",
-            ]
-            label = " ".join(bits).strip().casefold()
-            if wanted.casefold() in label:
-                return el
+            loc = root.locator(selectors)
+            for i in range(loc.count()):
+                el = loc.nth(i)
+                try:
+                    if not el.is_visible():
+                        continue
+                    bits = [
+                        el.inner_text() or "",
+                        el.get_attribute("value") or "",
+                        el.get_attribute("aria-label") or "",
+                        el.get_attribute("title") or "",
+                    ]
+                    label = " ".join(bits).strip().casefold()
+                    if wanted.casefold() in label:
+                        return el
+                except Exception:
+                    pass
         except Exception:
             pass
     return None
 
 
 def get_input(page):
-    # ExampdfX currently exposes a textarea for the source text.
-    return visible(page, [
+    # Find the editor in the main document or any same-origin iframe.
+    selectors = [
         "textarea:not([readonly]):not([disabled])",
         "textarea",
+        "[role='textbox']:not([readonly]):not([disabled])",
         "[contenteditable='true']",
-    ])
+        "input[type='text']:not([readonly]):not([disabled])",
+    ]
+    frames = [page] + list(page.frames)
+    for root in frames:
+        for sel in selectors:
+            try:
+                loc = root.locator(sel)
+                for i in range(loc.count()):
+                    el = loc.nth(i)
+                    try:
+                        if el.is_visible():
+                            return el
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    return None
 
 
 def collect_output_candidates(page, original):
@@ -257,10 +280,29 @@ def collect_generic_text_candidates(page, original):
 
 def process_chunk(job, page, text, number, total):
     page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT_MS)
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(4000)
 
     inp = get_input(page)
     if not inp:
+        # Some client-side apps populate after load; give them another few seconds.
+        page.wait_for_timeout(6000)
+        inp = get_input(page)
+    if not inp:
+        try:
+            details = page.evaluate("""
+            () => ({
+              frames: Array.from(document.querySelectorAll('iframe')).map(f => ({
+                src: f.src || '', title: f.title || ''
+              })),
+              textareas: document.querySelectorAll('textarea').length,
+              textboxes: document.querySelectorAll('[role="textbox"]').length,
+              contenteditables: document.querySelectorAll('[contenteditable="true"]').length,
+              body: (document.body.innerText || '').slice(0, 1500)
+            })
+            """)
+            log(job, f"Input diagnostic: {json.dumps(details)[:1800]}", "error")
+        except Exception:
+            pass
         raise RuntimeError("ExampdfX input box not detected")
 
     inp.fill(text)
