@@ -1,28 +1,32 @@
 # PDF Paraphrasing Processor
 
-Self-contained PDF-to-DOCX paraphrasing service using Flask and an open-source T5 paraphrasing model.
+Final self-contained PDF-to-DOCX paraphrasing service.
 
-The final version does not automate ExampdfX or another third-party webpage. It performs English paraphrasing locally with Vamsi/T5_Paraphrase_Paws and Hugging Face Transformers.
+The project no longer automates ExampdfX or another third-party webpage. It runs the open-source Vamsi/T5_Paraphrase_Paws model in GGUF Q4_K_M format through llama-cpp-python.
+
+The GGUF model repository lists Q4_K_M at about 137 MB and describes it as a balanced quantization of Vamsi/T5_Paraphrase_Paws.
 
 Workflow:
 1. Upload PDF.
 2. Extract text page by page.
-3. Split into model-sized chunks.
-4. Paraphrase in batches.
+3. Split into small English text chunks.
+4. Paraphrase locally on Railway.
 5. Rebuild the pages into a DOCX.
-6. Download the DOCX.
+6. Download the document.
 
-The Hugging Face model card identifies Vamsi/T5_Paraphrase_Paws as an English paraphrase-generation T5 model trained on PAWS and documents direct Transformers usage.
-
-Important: this tool cannot guarantee a particular plagiarism-checker score. Keep required citations and review the rewritten document.
+Important:
+- This is paraphrasing, not a guarantee of any plagiarism-checker score.
+- Review the output and keep citations required by your assignment.
+- The first run downloads the model and is slower.
 
 Environment variables:
-MODEL_ID
-BATCH_SIZE
+MODEL_REPO
+MODEL_FILE
+MODEL_CTX
+MODEL_THREADS
 MAX_UNIT_WORDS
-MAX_INPUT_TOKENS
 MAX_OUTPUT_TOKENS
-TORCH_THREADS
 
 Default model:
-Vamsi/T5_Paraphrase_Paws
+tensorblock/T5_Paraphrase_Paws-GGUF
+T5_Paraphrase_Paws-Q4_K_M.gguf
