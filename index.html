@@ -3,357 +3,189 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#111111">
+<meta name="theme-color" content="#111">
 <title>PDF Paraphrasing Processor</title>
 <style>
-:root{
-  --bg:#f4f5f7;--card:#fff;--ink:#151515;--muted:#6b7280;--line:#dedede;
-  font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);padding:16px}
-.wrap{max-width:980px;margin:0 auto}
-.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;box-shadow:0 8px 28px rgba(0,0,0,.05)}
-h1{margin:0 0 8px;font-size:27px;line-height:1.2}
-.sub{color:var(--muted);line-height:1.5;margin:0 0 18px}
-.info{background:#f0f1f3;border-radius:12px;padding:12px 14px;line-height:1.55;margin-bottom:16px}
-.file{width:100%;padding:10px;border:1px solid #cfcfcf;border-radius:10px;background:white}
-button{width:100%;border:0;border-radius:10px;background:#111;color:#fff;padding:13px 15px;margin-top:12px;font-size:15px;font-weight:700;cursor:pointer}
-button:disabled{opacity:.55;cursor:not-allowed}
-.row{display:flex;justify-content:space-between;gap:12px;margin-top:19px;font-weight:700}
-.bar{height:11px;border-radius:999px;background:#ddd;overflow:hidden;margin-top:10px}
-.fill{height:100%;width:0;background:#111;transition:width .25s}
-.status{margin-top:8px;color:#555;font-size:13px}
-.job{font-size:12px;color:#888;margin-top:7px;word-break:break-all}
-.logs{height:320px;overflow:auto;background:#101010;color:#eee;border-radius:13px;padding:12px;margin-top:17px;font:12px/1.55 Consolas,monospace}
-.log{padding:5px 2px;border-bottom:1px solid #252525}
-.time{color:#888}.success{color:#91dda0}.error{color:#ff8f8f}.warn{color:#f3d37a}
-.download{display:none}
-.note{margin-top:14px;font-size:13px;color:#666;line-height:1.5}
-.kbd{font-family:monospace;background:#eee;padding:2px 5px;border-radius:4px}
-@media(max-width:600px){
-  body{padding:10px}.card{padding:16px}h1{font-size:23px}.logs{height:280px}
-}
+:root{--bg:#f4f5f7;--card:#fff;--ink:#151515;--muted:#6b7280;--line:#dedede;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);padding:16px}.wrap{max-width:980px;margin:auto}.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;box-shadow:0 8px 28px rgba(0,0,0,.05)}
+h1{margin:0 0 8px;font-size:27px}.sub{color:var(--muted);line-height:1.5;margin:0 0 18px}.info{background:#f0f1f3;border-radius:12px;padding:12px 14px;line-height:1.55;margin-bottom:16px}.file{width:100%;padding:10px;border:1px solid #cfcfcf;border-radius:10px;background:#fff}
+button{width:100%;border:0;border-radius:10px;background:#111;color:#fff;padding:13px 15px;margin-top:12px;font-size:15px;font-weight:700;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}
+.row{display:flex;justify-content:space-between;gap:12px;margin-top:19px;font-weight:700}.bar{height:11px;border-radius:999px;background:#ddd;overflow:hidden;margin-top:10px}.fill{height:100%;width:0;background:#111;transition:width .25s}.status{margin-top:8px;color:#555;font-size:13px}.job{font-size:12px;color:#888;margin-top:7px;word-break:break-all}.logs{height:320px;overflow:auto;background:#101010;color:#eee;border-radius:13px;padding:12px;margin-top:17px;font:12px/1.55 Consolas,monospace}.log{padding:5px 2px;border-bottom:1px solid #252525}.time{color:#888}.success{color:#91dda0}.error{color:#ff8f8f}.warn{color:#f3d37a}.download{display:none}.note{margin-top:14px;font-size:13px;color:#666;line-height:1.5}
+@media(max-width:600px){body{padding:10px}.card{padding:16px}h1{font-size:23px}.logs{height:280px}}
 </style>
 </head>
 <body>
-<div class="wrap">
-<div class="card">
+<div class="wrap"><div class="card">
 <h1>PDF Paraphrasing Processor</h1>
-<p class="sub">Upload a PDF and generate a rewritten DOCX directly in your browser. The PDF text is not uploaded to this app's server.</p>
-
-<div class="info">
-<b>Engine:</b> Revision Assistant — Rewrite (Plag) &nbsp;•&nbsp;
-<b>Model:</b> Flan-T5-small, quantized for browser use &nbsp;•&nbsp;
-<b>Output:</b> DOCX
-</div>
-
+<p class="sub">Processes the PDF one page at a time. Text is rewritten locally in your browser; the original page order, headings, tables and visual elements are treated as protected structure.</p>
+<div class="info"><b>Engine:</b> Page-by-page local rewrite &nbsp;•&nbsp; <b>Model:</b> Flan-T5-small &nbsp;•&nbsp; <b>Output:</b> DOCX</div>
 <input id="file" class="file" type="file" accept=".pdf,application/pdf">
 <button id="start" onclick="run()">Start processing</button>
-
-<div class="row">
-  <span id="status">Idle</span>
-  <span id="count">0 / 0</span>
-</div>
+<div class="row"><span id="status">Idle</span><span id="count">0 / 0 pages</span></div>
 <div class="bar"><div id="fill" class="fill"></div></div>
-<div id="status2" class="status">First run downloads the browser model; later runs use the browser cache when available.</div>
+<div id="status2" class="status">First run downloads the browser model; later runs may use the browser cache.</div>
 <div class="job">File: <span id="filename">—</span></div>
-
 <div id="logs" class="logs"></div>
-
 <button id="download" class="download" onclick="downloadFile()">Download DOCX</button>
-<div class="note">
-The browser loads the paraphrasing model from Hugging Face. Generation runs on your device with WebGPU when available, otherwise WASM. The selected model has a verified Transformers.js-compatible ONNX repository. This is a paraphrasing tool and cannot guarantee a particular plagiarism-checker result; retain citations required by your assignment.
-</div>
-</div>
-</div>
+<div class="note">The model runs on your device. Headings, numbers, tables and image/chart placeholders are protected from paraphrasing where detected. No paraphrasing system can guarantee a particular plagiarism-checker result; retain required citations.</div>
+</div></div>
 
 <script type="module">
 import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.mjs";
 import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0";
-import { Document, Paragraph, Packer } from "https://cdn.jsdelivr.net/npm/docx@9.7.1/+esm";
+import { Document, Paragraph, TextRun, Packer, HeadingLevel, PageBreak, Table, TableRow, TableCell } from "https://cdn.jsdelivr.net/npm/docx@9.7.1/+esm";
 
-const MODEL_ID = "Xenova/flan-t5-small";
-const MAX_WORDS = 110;
+const MODEL_ID="Xenova/flan-t5-small";
+const MAX_WORDS=110;
+pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.mjs";
+try{env.useBrowserCache=true}catch{}
 
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.mjs";
+const $=id=>document.getElementById(id);
+let generator=null, outputBlob=null;
 
-try { env.useBrowserCache = true; } catch {}
-
-const $ = (id) => document.getElementById(id);
-let generator = null;
-let outputBlob = null;
-
-function log(message, level="info"){
-  const line = document.createElement("div");
-  line.className = "log " + level;
-  const now = new Date().toLocaleTimeString([], {hour12:false});
-  line.innerHTML = '<span class="time">[' + esc(now) + ']</span> ' + esc(message);
-  $("logs").appendChild(line);
-  $("logs").scrollTop = $("logs").scrollHeight;
-}
-
-function esc(value){
-  return String(value).replace(/[&<>"']/g, c => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-  }[c]));
-}
-
-function setProgress(current, total, message){
-  $("count").textContent = current + " / " + total;
-  $("fill").style.width = total ? ((current / total) * 100) + "%" : "0%";
-  $("status").textContent = message;
-}
-
-function wordCount(text){
-  return (String(text || "").match(/\S+/g) || []).length;
-}
-
-function cleanText(text){
-  return String(text || "").replace(/\s+/g, " ").trim();
-}
-
-function sentenceSplit(text){
-  const protectedText = cleanText(text).replace(
-    /\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|Fig|Eq|No|vs|etc)\./gi,
-    "$1<DOT>"
-  );
-  return protectedText
-    .split(/(?<=[.!?])\s+(?=[A-Z0-9])/)
-    .map(s => s.replaceAll("<DOT>", ".").trim())
-    .filter(Boolean);
-}
-
-function makeChunks(text){
-  const raw = String(text || "").replace(/\r/g, "");
-  const paragraphs = raw.split(/\n\s*\n+/).map(cleanText).filter(Boolean);
-  const chunks = [];
-  let current = [];
-
-  const flush = () => {
-    if(current.length){
-      chunks.push(cleanText(current.join(" ")));
-      current = [];
-    }
-  };
-
-  for(const para of paragraphs){
-    const sentences = sentenceSplit(para);
-    for(const sentence of (sentences.length ? sentences : [para])){
-      const words = sentence.split(/\s+/).filter(Boolean);
-
-      if(words.length > MAX_WORDS){
-        flush();
-        for(let i=0;i<words.length;i+=MAX_WORDS){
-          chunks.push(words.slice(i,i+MAX_WORDS).join(" "));
-        }
-        continue;
-      }
-
-      const candidate = current.concat(words);
-      if(candidate.length <= MAX_WORDS){
-        current = candidate;
-      }else{
-        flush();
-        current = words;
-      }
+function esc(v){return String(v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+function log(message,level="info"){const d=document.createElement("div");d.className="log "+level;d.innerHTML='<span class="time">['+esc(new Date().toLocaleTimeString([], {hour12:false}))+']</span> '+esc(message);$("logs").appendChild(d);$("logs").scrollTop=$("logs").scrollHeight}
+function setPageProgress(page,total,msg){$("count").textContent=page+" / "+total+" pages";$("fill").style.width=total?(page/total*100)+"%":"0%";$("status").textContent=msg}
+function clean(t){return String(t||"").replace(/\s+/g," ").trim()}
+function wc(t){return (String(t||"").match(/\S+/g)||[]).length}
+function splitSentences(t){return clean(t).replace(/\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|Fig|Eq|No|vs|etc)\./gi,"$1<DOT>").split(/(?<=[.!?])\s+(?=[A-Z0-9])/).map(x=>x.replaceAll("<DOT>",".").trim()).filter(Boolean)}
+function chunks(text){
+  const out=[];let cur=[];
+  const flush=()=>{if(cur.length){out.push(cur.join(" "));cur=[]}};
+  for(const para of String(text||"").split(/\n\s*\n+/).map(clean).filter(Boolean)){
+    for(const s of splitSentences(para)){
+      const words=s.split(/\s+/).filter(Boolean);
+      if(words.length>MAX_WORDS){flush();for(let i=0;i<words.length;i+=MAX_WORDS)out.push(words.slice(i,i+MAX_WORDS).join(" "));continue}
+      if(cur.length+words.length<=MAX_WORDS)cur.push(...words);else{flush();cur.push(...words)}
     }
     flush();
   }
-
-  flush();
-  return chunks;
+  return out;
 }
 
-async function extractPdf(file){
-  const data = new Uint8Array(await file.arrayBuffer());
-  const pdf = await pdfjsLib.getDocument({data}).promise;
-  const pages = [];
-
-  for(let pageNo=1; pageNo<=pdf.numPages; pageNo++){
-    const page = await pdf.getPage(pageNo);
-    const content = await page.getTextContent();
-    const text = content.items.map(item => item.str || "").join(" ").trim();
-    pages.push(text);
+/* Extract each PDF page separately. We retain line/position information so the
+   reconstruction layer can distinguish headings, normal paragraphs and table-like
+   lines instead of flattening the whole PDF into one stream. */
+async function extractPages(file){
+  const pdf=await pdfjsLib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
+  const pages=[];
+  for(let n=1;n<=pdf.numPages;n++){
+    const page=await pdf.getPage(n), content=await page.getTextContent();
+    const items=content.items.filter(x=>clean(x.str));
+    const lines=[];
+    for(const item of items){
+      const y=Math.round(item.transform[5]);
+      let line=lines.find(l=>Math.abs(l.y-y)<=3);
+      if(!line){line={y,text:""};lines.push(line)}
+      line.text+=(line.text?" ":"")+item.str;
+    }
+    lines.sort((a,b)=>b.y-a.y);
+    pages.push({pageNo:n,lines:lines.map(x=>clean(x.text)).filter(Boolean)});
   }
-
   return pages;
 }
 
-async function loadModel(){
-  if(generator) return generator;
+function isProtected(line){
+  const s=clean(line);
+  if(!s)return true;
+  if(/^(CHAPTER\s+\d+|\d+(\.\d+)*\s+[A-Z][^.!?]{0,100})$/i.test(s))return true;
+  if(/^\d+(\.\d+)*\s+/.test(s)&&wc(s)<18)return true;
+  if(/^(Table|Figure|Fig\.|Source:|Appendix|Date:|Place:|Signature|Roll No|Submitted by|Under the Guidance|Specialization|Academic Year)/i.test(s))return true;
+  if(/^\[?(Image Placeholder|IMAGE FOR PAGE)/i.test(s))return true;
+  if(/^(18\s*-\s*25|26\s*-\s*35|36\s*-\s*45|46\s*\+|Total)$/i.test(s))return true;
+  return false;
+}
 
-  const useWebGPU = !!navigator.gpu;
-  const device = useWebGPU ? "webgpu" : "wasm";
-  log("Loading browser model: " + MODEL_ID);
-  log("Inference device: " + device);
-
-  const progress = (p) => {
-    if(!p || !p.status) return;
-    if(p.status === "progress" && typeof p.progress === "number"){
-      $("status2").textContent = "Downloading model: " + Math.round(p.progress) + "%";
-    }else if(p.status === "done"){
-      $("status2").textContent = "Model ready.";
+function groupPage(page){
+  const blocks=[];let buf=[];
+  const flush=()=>{if(buf.length){blocks.push({type:"paragraph",text:clean(buf.join(" "))});buf=[]}};
+  for(const line of page.lines){
+    if(isProtected(line)){flush();blocks.push({type:"protected",text:line});}
+    else{
+      buf.push(line);
+      if(/[.!?]$/.test(line)&&wc(buf.join(" "))>=35)flush();
     }
-  };
-
-  try{
-    generator = await pipeline("text2text-generation", MODEL_ID, {
-      device,
-      dtype: "q8",
-      progress_callback: progress
-    });
-  }catch(firstError){
-    log("Quantized model load failed; retrying with default model settings.", "warn");
-    log(String(firstError), "warn");
-    generator = await pipeline("text2text-generation", MODEL_ID, {
-      device,
-      progress_callback: progress
-    });
   }
+  flush();
+  return blocks;
+}
 
-  $("status2").textContent = "Model ready on " + device + ".";
-  log("Model loaded successfully.", "success");
+async function loadModel(){
+  if(generator)return generator;
+  const device=navigator.gpu?"webgpu":"wasm";
+  log("Loading "+MODEL_ID+" on "+device+"…");
+  const progress=p=>{if(p?.status==="progress"&&typeof p.progress==="number")$("status2").textContent="Downloading model: "+Math.round(p.progress)+"%";if(p?.status==="done")$("status2").textContent="Model files ready."};
+  try{generator=await pipeline("text2text-generation",MODEL_ID,{device,dtype:"q8",progress_callback:progress})}
+  catch(e){log("Quantized load failed; retrying default settings.","warn");generator=await pipeline("text2text-generation",MODEL_ID,{device,progress_callback:progress})}
+  $("status2").textContent="Model ready on "+device;
+  log("Model loaded.","success");
   return generator;
 }
 
 async function rewrite(text){
-  const prompt = "Paraphrase the following text in clear, natural English while preserving the meaning and important facts: " + cleanText(text);
-
-  const result = await generator(prompt, {
-    max_new_tokens: Math.min(180, Math.max(80, Math.round(wordCount(text) * 1.35))),
-    num_beams: 4,
-    repetition_penalty: 1.12,
-    no_repeat_ngram_size: 3,
-    early_stopping: true
-  });
-
-  const rewritten = cleanText(result?.[0]?.generated_text || "");
-  if(!rewritten) return text;
-
-  // Do not silently replace good source text with a broken/truncated response.
-  if(wordCount(rewritten) < Math.max(8, Math.floor(wordCount(text) * 0.30))){
-    return text;
-  }
-
-  return rewritten;
+  const source=clean(text);
+  const prompt="Rewrite this academic paragraph in clear natural English. Preserve every fact, number, name, date, acronym and citation. Do not add information. Do not mention the rewriting task. Output only the rewritten paragraph: "+source;
+  const result=await generator(prompt,{max_new_tokens:Math.min(180,Math.max(80,Math.round(wc(source)*1.35))),num_beams:4,repetition_penalty:1.12,no_repeat_ngram_size:3,early_stopping:true});
+  const out=clean(result?.[0]?.generated_text||"");
+  if(!out||wc(out)<Math.max(8,Math.floor(wc(source)*.30)))return source;
+  return out;
 }
 
-async function buildDocx(pageResults, fileName){
-  const children = [];
-
-  children.push(new Paragraph({
-    text: "Processed: " + fileName
-  }));
-
-  for(const page of pageResults){
-    children.push(new Paragraph({text:""}));
-
-    for(const block of page.blocks){
-      children.push(new Paragraph({text:block}));
-    }
-
-    if(pageResults.indexOf(page) !== pageResults.length - 1){
-      children.push(new Paragraph({children: [], pageBreakBefore:true}));
-    }
+function makeParagraph(text,protectedBlock=false){
+  if(protectedBlock){
+    return new Paragraph({children:[new TextRun({text,bold:/^(CHAPTER|\d+(\.\d+)*\s)/i.test(text)})]});
   }
+  return new Paragraph({text});
+}
 
-  const doc = new Document({
-    sections: [{
-      properties: {
-        page: {
-          margin: {top:720,right:720,bottom:720,left:720}
-        }
-      },
-      children
-    }]
+async function buildDocx(pages,fileName){
+  const children=[new Paragraph({text:"Processed: "+fileName,bold:true})];
+  pages.forEach((page,idx)=>{
+    children.push(new Paragraph({text:"Page "+page.pageNo,bold:true}));
+    for(const b of page.blocks)children.push(makeParagraph(b.text,b.type==="protected"));
+    if(idx<pages.length-1)children.push(new Paragraph({children:[new PageBreak()]}));
   });
-
-  return await Packer.toBlob(doc);
+  return await Packer.toBlob(new Document({sections:[{properties:{page:{margin:{top:720,right:720,bottom:720,left:720}}},children}]}));
 }
 
 async function run(){
-  const file = $("file").files[0];
-  if(!file){
-    $("status").textContent = "Choose a PDF first";
-    return;
-  }
-
-  $("start").disabled = true;
-  $("download").style.display = "none";
-  outputBlob = null;
-  $("logs").innerHTML = "";
-  $("filename").textContent = file.name;
-  setProgress(0,0,"Reading PDF…");
-
+  const file=$("file").files[0];if(!file){$("status").textContent="Choose a PDF first";return}
+  $("start").disabled=true;$("download").style.display="none";outputBlob=null;$("logs").innerHTML="";$("filename").textContent=file.name;
   try{
-    log("Starting local browser processing.");
-    log("Reading PDF: " + file.name);
-
-    const pages = await extractPdf(file);
-    const pageResults = pages.map((text, i) => ({
-      pageNo:i+1,
-      blocks:[],
-      chunks:makeChunks(text)
-    }));
-
-    const units = pageResults.flatMap(page =>
-      page.chunks.map(chunk => ({pageNo:page.pageNo, chunk}))
-    );
-
-    if(!units.length){
-      throw new Error("No extractable text found in the PDF.");
-    }
-
-    log("PDF loaded: " + pages.length + " pages / " + units.length + " chunks.");
+    log("Reading PDF page by page…");
+    const raw=await extractPages(file);
+    log("Loaded "+raw.length+" pages.","success");
     await loadModel();
 
-    for(let i=0; i<units.length; i++){
-      const item = units[i];
-      setProgress(i, units.length, "Paraphrasing chunk " + (i+1) + "/" + units.length + "…");
-
-      // Let the browser repaint the progress UI before model inference.
-      await new Promise(resolve => setTimeout(resolve, 0));
-
-      const rewritten = await rewrite(item.chunk);
-      pageResults[item.pageNo - 1].blocks.push(rewritten);
-
-      setProgress(i+1, units.length, "Completed chunk " + (i+1) + "/" + units.length);
-      log("Chunk " + (i+1) + "/" + units.length + " completed.", "success");
+    const pages=[];
+    for(let p=0;p<raw.length;p++){
+      const page=raw[p], blocks=groupPage(page), result=[];
+      setPageProgress(p,raw.length,"Processing page "+(p+1)+" / "+raw.length+"…");
+      log("Page "+(p+1)+": "+blocks.length+" structural blocks detected.");
+      let n=0;
+      for(const b of blocks){
+        if(b.type==="protected"){result.push(b);continue}
+        for(const part of chunks(b.text)){
+          const rewritten=await rewrite(part);
+          result.push({type:"paragraph",text:rewritten});n++;
+          $("status2").textContent="Page "+(p+1)+": rewritten paragraph "+n;
+          await new Promise(r=>setTimeout(r,0));
+        }
+      }
+      pages.push({pageNo:page.pageNo,blocks:result});
+      setPageProgress(p+1,raw.length,"Completed page "+(p+1)+" / "+raw.length);
+      log("Page "+(p+1)+" completed.","success");
     }
-
-    $("status").textContent = "Creating DOCX…";
-    outputBlob = await buildDocx(pageResults, file.name);
-    setProgress(units.length, units.length, "Completed — DOCX ready");
-    $("download").style.display = "block";
-    log("DOCX created successfully.", "success");
-  }catch(error){
-    console.error(error);
-    $("status").textContent = error?.message || String(error);
-    log(error?.stack || error?.message || String(error), "error");
-  }finally{
-    $("start").disabled = false;
-  }
+    $("status").textContent="Creating formatted DOCX…";
+    outputBlob=await buildDocx(pages,file.name);
+    setPageProgress(raw.length,raw.length,"Completed — DOCX ready");
+    $("download").style.display="block";log("DOCX created successfully.","success");
+  }catch(e){console.error(e);$("status").textContent=e?.message||String(e);log(e?.stack||e?.message||String(e),"error")}
+  finally{$("start").disabled=false}
 }
 
-function downloadFile(){
-  if(!outputBlob) return;
-  const base = $("filename").textContent.replace(/\.pdf$/i,"");
-  const url = URL.createObjectURL(outputBlob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = base + "_paraphrased.docx";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-window.run = run;
-window.downloadFile = downloadFile;
-
-log("Ready. Select a PDF and start processing.");
+function downloadFile(){if(!outputBlob)return;const base=$("filename").textContent.replace(/\.pdf$/i,"");const u=URL.createObjectURL(outputBlob),a=document.createElement("a");a.href=u;a.download=base+"_paraphrased.docx";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000)}
+window.run=run;window.downloadFile=downloadFile;log("Ready. PDF will be processed page by page.");
 </script>
 </body>
 </html>
