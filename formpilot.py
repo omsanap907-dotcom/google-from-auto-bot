@@ -280,24 +280,42 @@ def process_chunk(job, page, text, number, total):
     if not btn:
         raise RuntimeError("ExampdfX 'Paraphrase Now' button not detected")
 
-    # Capture the site's AI responses directly from network traffic as a fallback
-    # when the rendered output element uses an unknown implementation.
-    network_responses = []
-    network_failures = []
+    # Watch the rendered page for the result. Do not synchronously read response
+    # bodies because OpenRouter may use a streaming response that never completes.
+    dom_changes = []
+    try:
+        page.evaluate("""
+        () => {
+          window.__paraphraseChanges = [];
+          const normalize = s => (s || '').replace(/\\s+/g, ' ').trim();
+          const observer = new MutationObserver(() => {
+            const values = Array.from(document.querySelectorAll(
+              'textarea, [contenteditable="true"], div, p, span, article, section'
+            )).map(el => ('value' in el && el.value) ? el.value : (el.innerText || ''))
+             .map(normalize)
+             .filter(x => x.length >= 40);
+            const uniq = [...new Set(values)];
+            window.__paraphraseChanges = uniq.slice(-80);
+          });
+          observer.observe(document.body, {subtree:true, childList:true, characterData:true, attributes:true, attributeFilter:['value','class','style']});
+        }
+        """)
+        log(job, "DOM change watcher enabled")
+    except Exception as e:
+        log(job, f"Could not enable DOM watcher: {e}", "info")
 
     def _resp(resp):
         try:
             u = resp.url
             if "exampdfx.com" in u or "openrouter.ai" in u:
-                network_responses.append(resp)
                 log(job, f"Network: {resp.status} {resp.request.method} {u[:180]}")
-        except Exception as e:
-            log(job, f"Network event error: {e}", "info")
+        except Exception:
+            pass
 
     def _failed(req):
         try:
             if "exampdfx.com" in req.url or "openrouter.ai" in req.url:
-                network_failures.append(f"{req.method} {req.url[:180]} :: {req.failure}")
+                log(job, f"Request failed: {req.method} {req.url[:180]} :: {req.failure}", "error")
         except Exception:
             pass
 
@@ -307,98 +325,58 @@ def process_chunk(job, page, text, number, total):
         page.on("console", lambda msg: log(job, f"Browser console: {msg.type} {msg.text[:300]}", "info"))
         log(job, "Browser/network diagnostics enabled")
     except Exception as e:
-        log(job, f"Could not attach browser diagnostics: {e}", "info")
+        log(job, f"Could not attach diagnostics: {e}", "info")
 
     btn.click(force=True)
     log(job, f"Chunk {number}/{total}: submitted to ExampdfX")
 
-    def extract_model_text(obj):
-        found = []
-        def walk(x):
-            if isinstance(x, dict):
-                for k, v in x.items():
-                    key = str(k).casefold()
-                    if isinstance(v, str):
-                        s = v.strip()
-                        if len(s) >= 40 and s != text.strip() and key in {
-                            "content", "text", "output", "rewritten", "paraphrase",
-                            "paraphrased_text", "result", "generated_text"
-                        }:
-                            found.append(s)
-                    else:
-                        walk(v)
-            elif isinstance(x, list):
-                for item in x:
-                    walk(item)
-        walk(obj)
-        return found
-
-    def read_response_body(resp):
-        try:
-            body = resp.text()
-        except Exception:
-            return []
-        ctype = (resp.headers.get("content-type") or "").casefold()
-        results = []
-
-        if "text/event-stream" in ctype or body.lstrip().startswith("data:"):
-            for line in body.splitlines():
-                line = line.strip()
-                if line.startswith("data:"):
-                    payload = line[5:].strip()
-                    if payload and payload != "[DONE]":
-                        try:
-                            results.extend(extract_model_text(json.loads(payload)))
-                        except Exception:
-                            pass
-        else:
-            try:
-                results.extend(extract_model_text(json.loads(body)))
-            except Exception:
-                clean = body.strip()
-                if len(clean) >= 40 and clean != text.strip():
-                    results.append(clean)
-        return results
-
     deadline_ms = RESULT_TIMEOUT_SECONDS * 1000
     elapsed = 0
-    checked = set()
 
     while elapsed < deadline_ms:
         page.wait_for_timeout(1000)
         elapsed += 1000
 
-        if network_failures:
-            for failure in network_failures[-3:]:
-                log(job, f"Network request failed: {failure}", "error")
-            network_failures.clear()
+        try:
+            changed = page.evaluate("() => window.__paraphraseChanges || []")
+        except Exception:
+            changed = []
 
-        # First try the direct model/API response.
-        for resp in list(network_responses):
-            key = id(resp)
-            if key in checked:
-                continue
-            try:
-                # response.text() waits for the response body to finish.
-                candidates = read_response_body(resp)
-                checked.add(key)
-                if candidates:
-                    candidates.sort(key=lambda x: (wc(x), len(x)), reverse=True)
-                    result = candidates[0]
-                    if wc(result) >= max(5, int(wc(text) * 0.15)):
-                        log(job, f"Captured rewritten text from network response ({wc(result)} words)", "success")
-                        return result
-            except Exception:
-                # A streaming response may not be complete yet. Retry it.
-                pass
+        # Prefer rendered text collected by the MutationObserver.
+        plausible = []
+        original_norm = re.sub(r"\\s+", " ", text or "").strip()
+        for candidate in changed:
+            candidate = re.sub(r"\\s+", " ", candidate or "").strip()
+            if candidate and candidate != original_norm and wc(candidate) >= max(5, int(wc(text) * 0.15)):
+                if len(candidate) <= max(len(text) * 2.5, 12000):
+                    plausible.append(candidate)
 
-        candidates = collect_output_candidates(page, text)
+        candidates = plausible or collect_output_candidates(page, text)
         if not candidates:
             candidates = collect_generic_text_candidates(page, text)
+
         if candidates:
+            candidates.sort(key=lambda x: (wc(x), len(x)), reverse=True)
             result = candidates[0]
-            if wc(result) >= max(5, int(wc(text) * 0.25)):
+            if wc(result) >= max(5, int(wc(text) * 0.15)):
+                log(job, f"Detected rewritten text ({wc(result)} words)", "success")
                 return result
+
+        # Stop early only when the page clearly reports a target/API error.
+        try:
+            body = (page.locator("body").inner_text(timeout=1000) or "").strip()
+            low = body.casefold()
+            error_markers = [
+                "something went wrong", "error generating", "failed to generate",
+                "too many requests", "rate limit", "api error", "network error",
+                "failed to paraphrase", "unable to paraphrase"
+            ]
+            hit = next((m for m in error_markers if m in low), None)
+            if hit:
+                log(job, f"ExampdfX page reports: {hit}", "error")
+                break
+        except Exception:
+            pass
 
     # Diagnostic screenshot and DOM summary make failures visible in the UI/Railway logs.
     diag = WORK_DIR / f"{job}_chunk_{number}_debug.png"
