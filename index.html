@@ -1,22 +1,18 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Document Processor</title>
+<title>Document Processor & AI Tools</title>
 <style>
-body{font-family:system-ui,Arial;max-width:900px;margin:auto;padding:16px;background:#f5f5f5;color:#171717}
-.card{background:#fff;padding:20px;border:1px solid #ddd;border-radius:14px}
-.button{padding:12px 16px;margin-top:12px;border:0;border-radius:9px;background:#111;color:#fff;font-weight:600;width:100%}
-.secondary{background:#e9e9e9;color:#111}.status{display:flex;justify-content:space-between;margin-top:18px;font-weight:600}
-#bar{height:10px;background:#ddd;margin-top:12px;border-radius:99px;overflow:hidden}#fill{height:100%;background:#222;width:0;transition:width .3s}
-#logbox{margin-top:18px;border:1px solid #ddd;border-radius:10px;background:#101010;color:#eee;height:260px;overflow:auto;padding:10px;font-family:monospace;font-size:12px}
-.log{padding:5px 2px;border-bottom:1px solid #252525}.time{color:#999}.success{color:#8fdf9b}.error{color:#ff8d8d}.small{color:#666;font-size:13px}
-#job{font-family:monospace;font-size:11px;word-break:break-all}
-#captcha{display:none;margin-top:18px;border:2px solid #e0a100;border-radius:12px;padding:12px;background:#fff9e6}
-#capimg{display:block;width:100%;height:auto;border:1px solid #bbb;border-radius:8px;touch-action:none;cursor:crosshair}
-.hint{font-size:13px;color:#555}.row{display:flex;gap:8px}.row button{flex:1}
+body{font-family:system-ui,Arial;max-width:1000px;margin:auto;padding:16px;background:#f5f5f5;color:#171717}.card{background:#fff;padding:20px;border:1px solid #ddd;border-radius:14px}
+.button{padding:12px 16px;margin-top:12px;border:0;border-radius:9px;background:#111;color:#fff;font-weight:600;width:100%}.secondary{background:#e9e9e9;color:#111}
+.status{display:flex;justify-content:space-between;margin-top:18px;font-weight:600}#bar{height:10px;background:#ddd;margin-top:12px;border-radius:99px;overflow:hidden}#fill{height:100%;background:#222;width:0;transition:width .3s}
+#logbox{margin-top:18px;border:1px solid #ddd;border-radius:10px;background:#101010;color:#eee;height:220px;overflow:auto;padding:10px;font-family:monospace;font-size:12px}.log{padding:5px 2px;border-bottom:1px solid #252525}.time{color:#999}.success{color:#8fdf9b}.error{color:#ff8d8d}.small,.hint{color:#666;font-size:13px}
+#job{font-family:monospace;font-size:11px;word-break:break-all}#captcha{display:none;margin-top:18px;border:2px solid #e0a100;border-radius:12px;padding:12px;background:#fff9e6}
+#capimg{display:block;width:100%;height:auto;border:1px solid #bbb;border-radius:8px;touch-action:none;cursor:crosshair}.row{display:flex;gap:8px}.row button{flex:1}
+.tools{margin-top:28px}.tools h2{margin-bottom:8px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.tool{display:block;padding:16px;border:1px solid #ddd;border-radius:12px;text-decoration:none;color:#171717;background:#fafafa}.tool:hover{border-color:#999}.tool strong{display:block;font-size:17px;margin-bottom:5px}.badge{font-size:11px;border:1px solid #ccc;border-radius:999px;padding:3px 7px;margin-left:6px;color:#555}
 </style></head>
 <body><div class="card">
 <h1>Document Processor</h1>
-<p>Upload a PDF and process it in 500-word chunks. If the target site asks for CAPTCHA, it will pause and let you solve it from your phone.</p>
+<p>Upload a PDF and process it in 500-word chunks. If the target site asks for CAPTCHA, processing pauses so you can complete it.</p>
 <input id="file" type="file" accept=".pdf">
 <button class="button" onclick="run()">Start processing</button>
 <div class="status"><span id="status">Idle</span><span id="count">0 / 0</span></div>
@@ -24,14 +20,21 @@ body{font-family:system-ui,Arial;max-width:900px;margin:auto;padding:16px;backgr
 <p class="small">Job ID: <span id="job">—</span></p>
 <div id="captcha">
 <h3>🔐 CAPTCHA required</h3>
-<p class="hint">Tap the CAPTCHA checkbox/challenge on the image below. The tap is sent to the browser running on the server. If the challenge needs scrolling, use the buttons below.</p>
+<p class="hint">Complete the CAPTCHA from the screenshot. Tap the relevant control and use the scroll buttons when needed.</p>
 <img id="capimg" alt="CAPTCHA browser screenshot">
 <div class="row"><button class="button secondary" onclick="captchaAction('scroll',0,600)">Scroll down</button><button class="button secondary" onclick="captchaAction('scroll',0,-600)">Scroll up</button></div>
 <button class="button secondary" onclick="reloadCaptcha()">Reload page</button>
-<p class="hint" id="capmsg"></p>
-</div>
+<p class="hint" id="capmsg"></p></div>
 <div id="logbox"></div>
 <button id="download" class="button" style="display:none" onclick="downloadFile()">Download DOCX</button>
+
+<section class="tools">
+<h2>AI & Model Tools</h2>
+<div class="grid">
+<a class="tool" href="https://poe.com/" target="_blank" rel="noopener noreferrer"><strong>Poe AI <span class="badge">Multi-model</span></strong><span>Chat with multiple AI models from one platform.</span></a>
+<a class="tool" href="https://lmarena.ai/" target="_blank" rel="noopener noreferrer"><strong>LMArena <span class="badge">Compare</span></strong><span>Blind side-by-side comparisons of AI model responses.</span></a>
+</div>
+</section>
 </div>
 <script>
 const $=id=>document.getElementById(id);let jobId=null,capTimer=null;
@@ -51,35 +54,14 @@ async function refresh(){
   if(d.total)$('fill').style.width=(d.current/d.total*100)+'%';
   $('logbox').innerHTML=(d.logs||[]).map(x=>'<div class="log '+x.level+'"><span class="time">['+x.time+']</span> '+esc(x.message)+'</div>').join('');
   $('logbox').scrollTop=$('logbox').scrollHeight;
-  if(d.status==='CAPTCHA') showCaptcha();
-  else if(d.status!=='CAPTCHA') $('captcha').style.display='none';
-  if(d.status==='Completed')$('download').style.display='block';
-  if(d.status==='Error')$('download').style.display='none';
+  if(d.status==='CAPTCHA')showCaptcha();else $('captcha').style.display='none';
+  if(d.status==='Completed')$('download').style.display='block';if(d.status==='Error')$('download').style.display='none';
  }catch(e){}
 }
 function esc(s){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-async function showCaptcha(){
- $('captcha').style.display='block';
- await loadCaptcha();
- if(!capTimer)capTimer=setInterval(loadCaptcha,1500);
-}
-async function loadCaptcha(){
- if(!jobId)return;
- const r=await fetch('/api/jobs/'+jobId+'/captcha/image?ts='+Date.now());
- if(r.ok){const blob=await r.blob();$('capimg').src=URL.createObjectURL(blob);$('capmsg').textContent='Tap the CAPTCHA in the screenshot.'}
-}
-$('capimg').addEventListener('click',async e=>{
- const r=e.currentTarget.getBoundingClientRect();
- const x=(e.clientX-r.left)*(1280/r.width);
- const y=(e.clientY-r.top)*(900/r.height);
- await captchaAction('click',x,y);
- setTimeout(loadCaptcha,500);
-});
-async function captchaAction(action,x,y){
- if(!jobId)return;
- await fetch('/api/jobs/'+jobId+'/captcha/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,x,y})});
-}
-function reloadCaptcha(){captchaAction('reload',0,0);setTimeout(loadCaptcha,1000)}
-function downloadFile(){window.location.href='/api/jobs/'+jobId+'/download'}
-setInterval(refresh,1000);
+async function showCaptcha(){$('captcha').style.display='block';await loadCaptcha();if(!capTimer)capTimer=setInterval(loadCaptcha,1500)}
+async function loadCaptcha(){if(!jobId)return;const r=await fetch('/api/jobs/'+jobId+'/captcha/image?ts='+Date.now());if(r.ok){const blob=await r.blob();$('capimg').src=URL.createObjectURL(blob);$('capmsg').textContent='Tap the CAPTCHA in the screenshot.'}}
+$('capimg').addEventListener('click',async e=>{const r=e.currentTarget.getBoundingClientRect();const x=(e.clientX-r.left)*(1280/r.width);const y=(e.clientY-r.top)*(900/r.height);await captchaAction('click',x,y);setTimeout(loadCaptcha,500)});
+async function captchaAction(action,x,y){if(!jobId)return;await fetch('/api/jobs/'+jobId+'/captcha/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,x,y})})}
+function reloadCaptcha(){captchaAction('reload',0,0);setTimeout(loadCaptcha,1000)}function downloadFile(){window.location.href='/api/jobs/'+jobId+'/download'}setInterval(refresh,1000);
 </script></body></html>
