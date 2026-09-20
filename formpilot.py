@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import uuid
 from pathlib import Path
 from threading import Lock, Thread
@@ -279,30 +280,117 @@ def process_chunk(job, page, text, number, total):
     if not btn:
         raise RuntimeError("ExampdfX 'Paraphrase Now' button not detected")
 
-    # Snapshot current visible output-like fields before submission.
+    # Capture the site's AI responses directly from network traffic as a fallback
+    # when the rendered output element uses an unknown implementation.
+    network_responses = []
+    network_failures = []
+
     def _resp(resp):
         try:
             u = resp.url
             if "exampdfx.com" in u or "openrouter.ai" in u:
+                network_responses.append(resp)
                 log(job, f"Network: {resp.status} {resp.request.method} {u[:180]}")
+        except Exception as e:
+            log(job, f"Network event error: {e}", "info")
+
+    def _failed(req):
+        try:
+            if "exampdfx.com" in req.url or "openrouter.ai" in req.url:
+                network_failures.append(f"{req.method} {req.url[:180]} :: {req.failure}")
         except Exception:
             pass
+
     try:
         page.on("response", _resp)
-        page.on("requestfailed", lambda req: log(job, f"Request failed: {req.method} {req.url[:180]} :: {req.failure}", "error") if "exampdfx.com" in req.url or "openrouter.ai" in req.url else None)
+        page.on("requestfailed", _failed)
         page.on("console", lambda msg: log(job, f"Browser console: {msg.type} {msg.text[:300]}", "info"))
-        log(job, "Browser diagnostics enabled")
-    except Exception:
-        pass
+        log(job, "Browser/network diagnostics enabled")
+    except Exception as e:
+        log(job, f"Could not attach browser diagnostics: {e}", "info")
 
     btn.click(force=True)
     log(job, f"Chunk {number}/{total}: submitted to ExampdfX")
 
+    def extract_model_text(obj):
+        found = []
+        def walk(x):
+            if isinstance(x, dict):
+                for k, v in x.items():
+                    key = str(k).casefold()
+                    if isinstance(v, str):
+                        s = v.strip()
+                        if len(s) >= 40 and s != text.strip() and key in {
+                            "content", "text", "output", "rewritten", "paraphrase",
+                            "paraphrased_text", "result", "generated_text"
+                        }:
+                            found.append(s)
+                    else:
+                        walk(v)
+            elif isinstance(x, list):
+                for item in x:
+                    walk(item)
+        walk(obj)
+        return found
+
+    def read_response_body(resp):
+        try:
+            body = resp.text()
+        except Exception:
+            return []
+        ctype = (resp.headers.get("content-type") or "").casefold()
+        results = []
+
+        if "text/event-stream" in ctype or body.lstrip().startswith("data:"):
+            for line in body.splitlines():
+                line = line.strip()
+                if line.startswith("data:"):
+                    payload = line[5:].strip()
+                    if payload and payload != "[DONE]":
+                        try:
+                            results.extend(extract_model_text(json.loads(payload)))
+                        except Exception:
+                            pass
+        else:
+            try:
+                results.extend(extract_model_text(json.loads(body)))
+            except Exception:
+                clean = body.strip()
+                if len(clean) >= 40 and clean != text.strip():
+                    results.append(clean)
+        return results
+
     deadline_ms = RESULT_TIMEOUT_SECONDS * 1000
     elapsed = 0
+    checked = set()
+
     while elapsed < deadline_ms:
         page.wait_for_timeout(1000)
         elapsed += 1000
+
+        if network_failures:
+            for failure in network_failures[-3:]:
+                log(job, f"Network request failed: {failure}", "error")
+            network_failures.clear()
+
+        # First try the direct model/API response.
+        for resp in list(network_responses):
+            key = id(resp)
+            if key in checked:
+                continue
+            try:
+                # response.text() waits for the response body to finish.
+                candidates = read_response_body(resp)
+                checked.add(key)
+                if candidates:
+                    candidates.sort(key=lambda x: (wc(x), len(x)), reverse=True)
+                    result = candidates[0]
+                    if wc(result) >= max(5, int(wc(text) * 0.15)):
+                        log(job, f"Captured rewritten text from network response ({wc(result)} words)", "success")
+                        return result
+            except Exception:
+                # A streaming response may not be complete yet. Retry it.
+                pass
 
         candidates = collect_output_candidates(page, text)
         if not candidates:
