@@ -98,11 +98,13 @@ def log(job, message, level="info"):
         if job not in _jobs:
             return
         j = _jobs[job]
-        j["logs"].append({
+        entry = {
             "time": datetime.now().strftime("%H:%M:%S"),
             "message": message,
             "level": level,
-        })
+        }
+        j["logs"].append(entry)
+        print(f"[{entry['time']}] {level.upper()}: {message}", flush=True)
         j["logs"] = j["logs"][-MAX_LOGS:]
 
 
@@ -287,7 +289,9 @@ def process_chunk(job, page, text, number, total):
             pass
     try:
         page.on("response", _resp)
-        page.on("console", lambda msg: log(job, f"Browser console: {msg.type} {msg.text[:180]}", "info"))
+        page.on("requestfailed", lambda req: log(job, f"Request failed: {req.method} {req.url[:180]} :: {req.failure}", "error") if "exampdfx.com" in req.url or "openrouter.ai" in req.url else None)
+        page.on("console", lambda msg: log(job, f"Browser console: {msg.type} {msg.text[:300]}", "info"))
+        log(job, "Browser diagnostics enabled")
     except Exception:
         pass
 
@@ -308,13 +312,19 @@ def process_chunk(job, page, text, number, total):
             if wc(result) >= max(5, int(wc(text) * 0.25)):
                 return result
 
-    # Diagnostic screenshot/HTML make failures visible in Railway logs/files.
+    # Diagnostic screenshot and DOM summary make failures visible in the UI/Railway logs.
     diag = WORK_DIR / f"{job}_chunk_{number}_debug.png"
     try:
         page.screenshot(path=str(diag), full_page=False)
         log(job, f"Chunk {number}: result not detected after {RESULT_TIMEOUT_SECONDS}s; diagnostic screenshot saved", "error")
-    except Exception:
-        pass
+    except Exception as e:
+        log(job, f"Diagnostic screenshot failed: {e}", "error")
+    try:
+        diag_text = page.locator("body").inner_text(timeout=3000).strip()
+        log(job, f"Page text after timeout: {diag_text[:1200]}", "error")
+        log(job, f"Frames: {len(page.frames)}", "info")
+    except Exception as e:
+        log(job, f"DOM diagnostic failed: {e}", "error")
 
     raise RuntimeError(f"ExampdfX did not return rewritten text for chunk {number} within {RESULT_TIMEOUT_SECONDS} seconds")
 
