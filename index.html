@@ -20,7 +20,7 @@ body{font-family:system-ui,Arial;max-width:1000px;margin:auto;padding:16px;backg
 </head>
 <body>
 <div class="card">
-<h1>PDF Paraphrasing Processor</h1>
+<h1>PDF Paraphrasing Processor <span style="font-size:12px;color:#666">v4</span></h1>
 <p>Upload a PDF. The processor extracts the text, splits it below ExampdfX's 3,000-character input limit, sends each chunk in <b>Formal</b> mode, then creates a DOCX.</p>
 <div class="info">Backend: Railway • Rewriter: ExampdfX • Chunks: up to 2,800 characters</div>
 
@@ -82,6 +82,15 @@ async function refresh(){
  if(!jobId)return;
  try{
   const r=await fetch(API_BASE+'/api/jobs/'+encodeURIComponent(jobId));
+  if(r.status===404){
+    jobId=null;
+    $('status').textContent='Previous job expired. Start a new job.';
+    $('count').textContent='0 / 0';
+    $('job').textContent='—';
+    $('fill').style.width='0%';
+    $('logbox').innerHTML='<div class="log error">The server was redeployed and cleared the previous in-memory job. Upload the PDF again.</div>';
+    return;
+  }
   const d=await readResponse(r);
 
   $('status').textContent=d.message||d.status;
