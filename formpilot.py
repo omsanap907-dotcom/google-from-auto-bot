@@ -104,10 +104,7 @@ def init_model():
         _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-        _model = AutoModelForSeq2SeqLM.from_pretrained(
-            MODEL_ID,
-            low_cpu_mem_usage=True,
-        ).to(_device)
+        _model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_ID).to(_device)
         _model.eval()
 
 
