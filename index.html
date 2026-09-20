@@ -63,7 +63,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
 
 <button id="download" class="download" onclick="downloadFile()">Download DOCX</button>
 <div class="note">
-The browser loads the paraphrasing model from Hugging Face. Generation runs on your device with WebGPU when available, otherwise WASM. This is a paraphrasing tool and cannot guarantee a particular plagiarism-checker result; retain citations required by your assignment.
+The browser loads the paraphrasing model from Hugging Face. Generation runs on your device with WebGPU when available, otherwise WASM. The selected model has a verified Transformers.js-compatible ONNX repository. This is a paraphrasing tool and cannot guarantee a particular plagiarism-checker result; retain citations required by your assignment.
 </div>
 </div>
 </div>
@@ -73,7 +73,7 @@ import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build
 import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0";
 import { Document, Paragraph, Packer } from "https://cdn.jsdelivr.net/npm/docx@9.7.1/+esm";
 
-const MODEL_ID = "sk1729271/revision-assistant-rewrite-plag";
+const MODEL_ID = "Xenova/flan-t5-small";
 const MAX_WORDS = 110;
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -219,7 +219,7 @@ async function loadModel(){
 }
 
 async function rewrite(text){
-  const prompt = "paraphrase scientific text: " + cleanText(text);
+  const prompt = "Paraphrase the following text in clear, natural English while preserving the meaning and important facts: " + cleanText(text);
 
   const result = await generator(prompt, {
     max_new_tokens: Math.min(180, Math.max(80, Math.round(wordCount(text) * 1.35))),
